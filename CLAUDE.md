@@ -101,6 +101,12 @@ researcher_data/       # bind-mounted ro into container — researcher drops fil
 tests/test_smoke_v0.py # the gating test for sensitive-path evolution merges
 ```
 
+## Current work — start here
+
+**[ROADMAP.md](ROADMAP.md) is the source of truth for what's being built.** Per-feature step lists live under [docs/plans/](docs/plans/) — pick the first unchecked `- [ ]` step in the active plan and do it.
+
+Convention details: [docs/plans/README.md](docs/plans/README.md).
+
 ## v0 status
 
 **Done and verified on host (8/8 tests pass):**
@@ -114,7 +120,7 @@ tests/test_smoke_v0.py # the gating test for sensitive-path evolution merges
 - Self-modification cycle (the `--dry-run` flag test in the plan).
 - Sandbox-escape negative test.
 
-The verification plan is in `../../.claude/plans/this-openphil-repo-is-whimsical-hopper.md`.
+The architectural plan is in `../../.claude/plans/this-openphil-repo-is-whimsical-hopper.md`. Operational feature work is in [docs/plans/](docs/plans/).
 
 ## Common commands
 
