@@ -8,11 +8,13 @@ Single source of truth for what's being built. Update by editing this file. Per-
 
 ## 🟢 Now (active work, in priority order)
 
-| ID | Feature | Status | Plan |
-|---|---|---|---|
-| **R1** | Replayable event log (telemetry + cassette replay) | Planned | [R1-replay-event-log.md](docs/plans/R1-replay-event-log.md) |
-| **R5** | Cost ledger + tier routing + caching | Planned | [R5-cost-tier-routing.md](docs/plans/R5-cost-tier-routing.md) |
-| **R2** | Reflection → cross-session lessons buffer | Planned | [R2-reflection-lessons.md](docs/plans/R2-reflection-lessons.md) |
+R1, R5, R2 are being implemented in **parallel worktrees**. See [docs/plans/PARALLEL.md](docs/plans/PARALLEL.md) for the workflow.
+
+| ID | Feature | Status | Plan | Branch | Worktree |
+|---|---|---|---|---|---|
+| **R1** | Replayable event log (telemetry + cassette replay) | Planned | [R1-replay-event-log.md](docs/plans/R1-replay-event-log.md) | `feat/R1-replay` | `../coscientist-R1` |
+| **R5** | Cost ledger + tier routing + caching | Planned | [R5-cost-tier-routing.md](docs/plans/R5-cost-tier-routing.md) | `feat/R5-cost` | `../coscientist-R5` |
+| **R2** | Reflection → cross-session lessons buffer | Planned | [R2-reflection-lessons.md](docs/plans/R2-reflection-lessons.md) | `feat/R2-reflection` | `../coscientist-R2` |
 
 ## 🟡 Next (queued, plans not yet drafted)
 
