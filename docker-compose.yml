@@ -1,0 +1,53 @@
+services:
+  coscientist:
+    build: .
+    image: coscientist:dev
+    container_name: coscientist
+    env_file: .env
+    environment:
+      COSCIENTIST_ROOT: /app
+    # Default: no network. Tools that need internet run in coscientist-net (off by default).
+    network_mode: "none"
+    ports: []  # network_mode: none means we expose via host networking only — see profile below
+    volumes:
+      # Persistent runtime state — survives restarts.
+      - ./state:/app/state
+      # Researcher datasets, read-only.
+      - ./researcher_data:/app/researcher_data:ro
+      # Live source. Bind-mounted so evolution-agent merges land on the host repo.
+      - ./scaffold:/app/scaffold
+      - ./research:/app/research
+      - ./evolution:/app/evolution
+      - ./tools:/app/tools
+      - ./roles:/app/roles
+      - ./prompts:/app/prompts
+      - ./api:/app/api
+      - ./bin:/app/bin
+      - ./tests:/app/tests
+      - ./worktrees:/app/worktrees
+    profiles: ["isolated"]
+
+  # Default profile — same image, but with port mapping (network: bridge).
+  # Network access still tightly controlled at the tool layer.
+  coscientist-api:
+    build: .
+    image: coscientist:dev
+    container_name: coscientist-api
+    env_file: .env
+    environment:
+      COSCIENTIST_ROOT: /app
+    ports:
+      - "127.0.0.1:8765:8765"
+    volumes:
+      - ./state:/app/state
+      - ./researcher_data:/app/researcher_data:ro
+      - ./scaffold:/app/scaffold
+      - ./research:/app/research
+      - ./evolution:/app/evolution
+      - ./tools:/app/tools
+      - ./roles:/app/roles
+      - ./prompts:/app/prompts
+      - ./api:/app/api
+      - ./bin:/app/bin
+      - ./tests:/app/tests
+      - ./worktrees:/app/worktrees

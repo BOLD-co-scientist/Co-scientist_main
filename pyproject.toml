@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "coscientist"
+version = "0.1.0"
+description = "OpenPhil AI coscientist v3 — research agent + evolution agent on claude-agent-sdk"
+requires-python = ">=3.11"
+dependencies = [
+    "claude-agent-sdk>=0.1.0",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "pyyaml>=6.0",
+    "pydantic>=2.5",
+    "anyio>=4.0",
+    "watchfiles>=0.21",
+    "rank-bm25>=0.2.2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.4"]
+science = ["pandas>=2.0", "numpy>=1.26"]
+
+[project.scripts]
+coscientist = "coscientist_cli.main:main"
+
+[tool.setuptools.packages.find]
+include = [
+    "scaffold*",
+    "research*",
+    "evolution*",
+    "api*",
+    "tools*",
+    "coscientist_cli*",
+]
+exclude = ["state*", "worktrees*", "researcher_data*", "tests*"]

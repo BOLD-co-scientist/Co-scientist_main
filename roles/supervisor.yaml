@@ -1,0 +1,13 @@
+name: supervisor
+model: claude-opus-4-7
+system_prompt_path: research/supervisor_prompt.md
+description: Lead research agent. Talks to the human, plans, dispatches subagents, synthesizes findings.
+tools:
+  - Task
+  - bus
+  - memory
+  - hitl
+  - fs_read
+  - fs_write_workspace
+can_spawn: true
+hitl_level: default

@@ -1,0 +1,12 @@
+.git
+.venv
+state/
+worktrees/
+researcher_data/*
+!researcher_data/.gitkeep
+__pycache__/
+*.egg-info
+.pytest_cache
+.ruff_cache
+.env
+.env.local

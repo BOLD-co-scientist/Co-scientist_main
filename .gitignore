@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.env
+.env.local
+
+state/
+worktrees/
+researcher_data/
+!researcher_data/.gitkeep
+
+.pytest_cache/
+.ruff_cache/
+.DS_Store

@@ -1,0 +1,12 @@
+name: data_analyst
+model: claude-sonnet-4-6
+system_prompt_path: prompts/data_analyst.md
+description: Quantitative analysis on tabular data. Use for CSV/spreadsheet computation, summary statistics, simple plots, hypothesis-flavored data exploration.
+tools:
+  - bus
+  - memory
+  - fs_read
+  - fs_write_workspace
+  - py_exec
+can_spawn: false
+hitl_level: default
