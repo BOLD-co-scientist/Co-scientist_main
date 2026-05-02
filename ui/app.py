@@ -77,7 +77,7 @@ with st.sidebar:
             # border=False makes it look clean, while height=400 makes it scrollable!
             with st.container(height=400, border=False):
                 for sid in sessions:
-                    col1, col2 = st.columns([0.75, 0.25], vertical_alignment="center")
+                    col1, col2 = st.columns([0.8, 0.2], vertical_alignment="center")
                     
                     btn_type = "primary" if sid == st.session_state.session_id else "secondary"
                     if col1.button(sid, key=f"hist_{sid}", type=btn_type, use_container_width=True):
@@ -195,35 +195,43 @@ else:
             for line in f:
                 try:
                     event = json.loads(line)
-                    role = "user" if event.get("actor") == "human" else "assistant"
+                    actor = event.get("actor", "assistant")
+                    role = "user" if actor in ["human", "user"] else "assistant"
                     kind = event.get("kind", "")
                     
-                    with st.chat_message(role):
-                        if kind == "research.requested":
-                            st.markdown(f"**Research Task:**\n> {event.get('task')}")
+                    # Consolidate text extraction
+                    payload = event.get("payload", {})
+                    text = event.get("text") or payload.get("text") or event.get("summary")
+                    
+                    if kind == "research.requested":
+                        with st.chat_message("user"):
+                            st.markdown(f"**Research Task:**\n {event.get('task')}")
                             
-                        elif kind == "bus.send":
-                            target = event.get("target", "unknown")
-                            msg_kind = event.get("msg_kind", "message")
+                    elif role == "user" and text:
+                        # Catch mid-session human messages ("Hello world", directives, etc.)
+                        with st.chat_message("user"):
+                            st.markdown(text)
                             
-                            payload = event.get("payload", {})
-                            text = payload.get("text") or event.get("text") or event.get("summary")
-                            
-                            if text:
+                    elif kind == "bus.send":
+                        target = event.get("target", "unknown")
+                        msg_kind = event.get("msg_kind", "message")
+                        
+                        if text:
+                            with st.chat_message("assistant"):
                                 st.markdown(f"**To {target}:**\n{text}")
-                            else:
-                                with st.expander(f"✉️ {msg_kind.capitalize()} sent to {target}"):
-                                    st.json(event)
-                                    
-                        elif kind == "session.turn_result":
-                            summary = event.get("summary", "Complete")
-                            with st.expander(f"🔄 Turn Result: {summary}"):
-                                st.json(event)
-                                
                         else:
-                            with st.expander(f"⚙️ System Event: {kind}"):
+                            with st.expander(f"✉️ {msg_kind.capitalize()} sent to {target}"):
                                 st.json(event)
                                 
+                    elif kind == "session.turn_result":
+                        summary_text = text if text else "Complete"
+                        with st.expander(f"🔄 Turn Result: {summary_text}"):
+                            st.json(event)
+                            
+                    else:
+                        with st.expander(f"⚙️ System Event: {kind}"):
+                            st.json(event)
+                            
                 except json.JSONDecodeError:
                     pass
     else:
