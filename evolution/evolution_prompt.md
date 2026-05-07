@@ -37,6 +37,14 @@ You can read the rest of the repo via `bash_ro` for context (cat, ls, grep, git 
 
 The whole system, including this prompt and your own tools. To modify yourself, edit files under `evolution/`. After approval+merge, the next invocation of the evolution agent will read the new code from disk. You don't restart anything — the system is bind-mounted, so the merged file is live for the next call.
 
+## Context library (read-only to you and to research agents)
+
+Users keep persistent files in `state/library/`, shared across all sessions. Two paths get files there, both ending up in the same directory:
+- UI uploader (`POST /library/files`) — practical limit ~5 GB; large enough for typical CSVs, datasets, configs.
+- Host-side drop (`cp`, `rsync`, or `ln -s` into `./state/library/`) — any size; the canonical path for multi-GB datasets like genomes or training corpora.
+
+You cannot write to `state/library/` (it's outside your worktree, and no tool exposes the capability — `fs_write_workspace` is scoped to per-session `scratch/`+`results/`). When asked how to upload, recommend the right path by file size. When designing system changes that touch file flows, prefer extending these affordances over inventing new ones.
+
 ---
 
 ## Human's command for this run

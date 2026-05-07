@@ -51,3 +51,22 @@ services:
       - ./bin:/app/bin
       - ./tests:/app/tests
       - ./worktrees:/app/worktrees
+      
+  coscientist-ui:
+      build: .
+      image: coscientist:dev
+      container_name: coscientist-ui
+      env_file: .env
+      environment:
+        COSCIENTIST_ROOT: /app
+      ports:
+        - "127.0.0.1:8501:8501"
+      volumes:
+        - ./state:/app/state
+        - ./researcher_data:/app/researcher_data:ro
+        - ./ui:/app/ui
+        # Streamlit reads config from /app/.streamlit/config.toml on startup.
+        - ./.streamlit:/app/.streamlit:ro
+      command: ["streamlit", "run", "ui/app.py", "--server.port", "8501", "--server.address", "0.0.0.0"]
+      depends_on:
+        - coscientist-api

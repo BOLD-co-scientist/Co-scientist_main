@@ -122,6 +122,16 @@ Convention details: [docs/plans/README.md](docs/plans/README.md).
 
 The architectural plan is in `../../.claude/plans/this-openphil-repo-is-whimsical-hopper.md`. Operational feature work is in [docs/plans/](docs/plans/).
 
+## Verification policy
+
+After every feature or major checkpoint, run a backend verification before reporting the work as done. Drive the API directly with `curl` (and tail `state/sessions/<sid>/events.jsonl`) to confirm the data flow end-to-end — don't stop at unit tests or a syntax check.
+
+The only reason to skip is cost: if the verification would burn more than ~$5 of API spend (long-running multi-turn agent runs, large research tasks), pause and ask the human first. A trivial `evolution.requested` round-trip or a one-shot research session is fine to run unprompted.
+
+UI-only changes still warrant a backend pass to confirm the data the UI consumes is correctly shaped, even though the visual render still needs human eyes.
+
+**Before pushing to remote — do the maximum amount of validation that's feasible.** Treat `git push` as the gate, not `git commit`. Before pushing any branch to origin, run all of: (1) `pytest tests/test_smoke_v0.py -q` on the host, (2) the curl-driven backend pass for the touched feature surface, (3) `python3 -c "import ast; ast.parse(...)"` on every changed `.py`, (4) any feature-specific smoke listed under "Verification" in the relevant `docs/plans/<ID>-*.md`. If a check would cost >$5, escalate; otherwise just run it. A single failing check blocks the push — fix the underlying issue, don't push with `--no-verify` or skip the check.
+
 ## Common commands
 
 ```bash

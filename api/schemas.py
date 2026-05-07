@@ -45,3 +45,23 @@ class RoleSummary(BaseModel):
 class MemorySearchResult(BaseModel):
     layer: str
     hits: list[dict[str, Any]]
+
+
+class LibraryFile(BaseModel):
+    name: str
+    size: int
+    mtime: float
+
+
+class LibraryUploadResponse(BaseModel):
+    name: str
+    size: int
+    overwrote: bool
+
+
+class LibraryHealth(BaseModel):
+    file_count: int
+    total_bytes: int
+    disk_free_bytes: int
+    staging_files: int
+    broken_symlinks: list[dict[str, str]]
