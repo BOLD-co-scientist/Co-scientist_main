@@ -1,8 +1,9 @@
 # UI2 — Persistent context library
 
-**Status:** Planned
-**Owner:** unassigned
-**Started:** —
+**Status:** Done
+**Owner:** yhg01
+**Started:** 2026-05-07
+**Completed:** 2026-05-07
 **Done when:** A user can upload a file once via the UI, see it persist across all future research and evolution sessions, and have agents read it through `fs_read` — without `researcher_data/:ro` or `fs_write_workspace` allowed roots changing.
 
 ## Why
@@ -13,26 +14,26 @@ Researchers re-run experiments and follow-up sessions on the same dataset; the p
 
 ### Scaffold
 
-- [ ] 1. **Settings.** Add `LIBRARY = ROOT / "state" / "library"` to `scaffold/settings.py` and create it from `ensure_session_dirs` (or a new `ensure_runtime_dirs()` called at API startup) so it exists before the first upload.
-- [ ] 2. **fs_read allowed root.** Append `settings.LIBRARY.resolve()` to `_allowed_roots` in `tools/fs_read/server.py:11-19`. No other tool changes — `fs_write_workspace` stays scoped to `scratch/`+`results/`.
+- [x] 1. **Settings.** Add `LIBRARY = ROOT / "state" / "library"` to `scaffold/settings.py` and create it from `ensure_session_dirs` (or a new `ensure_runtime_dirs()` called at API startup) so it exists before the first upload.
+- [x] 2. **fs_read allowed root.** Append `settings.LIBRARY.resolve()` to `_allowed_roots` in `tools/fs_read/server.py:11-19`. No other tool changes — `fs_write_workspace` stays scoped to `scratch/`+`results/`.
 
 ### API
 
-- [ ] 3. **Upload endpoint.** `POST /library/files` (multipart). Body: `UploadFile`. Behavior: sanitize filename (strip path separators, reject leading dots, collapse to basename), **stream chunked to disk** (no `await file.read()` of full body — use `shutil.copyfileobj` on `file.file` in 1 MB chunks). Write to `state/library/.staging/<uuid>` first, then atomic `os.replace` to `state/library/<sanitized_name>` on success — partial uploads never masquerade as complete. **Overwrite if filename exists** (last-write-wins; no 409). Server-side soft cap configurable via env `LIBRARY_MAX_BYTES` (default 50 GB) — purely a guardrail against runaway uploads, not a usage ceiling. Return `{"name": <name>, "size": <bytes>, "overwrote": <bool>}`. Append a `library.upload` event to a new top-level `state/library_events.jsonl` (audit trail for an action that has no session id).
-- [ ] 4. **List endpoint.** `GET /library/files` returns `[{"name": …, "size": …, "mtime": …}, …]` sorted by mtime desc. Skips `.staging/` and dotfiles. **Lists every file in `state/library/` regardless of how it got there** — UI-uploaded *and* host-dropped files (`cp`/`rsync`/symlink into the directory) appear identically.
-- [ ] 5. **Delete endpoint.** `DELETE /library/files/{name}` removes the file (path-guard against escapes via `Path(name).name`). Append `library.delete` event.
-- [ ] 5b. **Health endpoint.** `GET /library/health` returns:
+- [x] 3. **Upload endpoint.** `POST /library/files` (multipart). Body: `UploadFile`. Behavior: sanitize filename (strip path separators, reject leading dots, collapse to basename), **stream chunked to disk** (no `await file.read()` of full body — use `shutil.copyfileobj` on `file.file` in 1 MB chunks). Write to `state/library/.staging/<uuid>` first, then atomic `os.replace` to `state/library/<sanitized_name>` on success — partial uploads never masquerade as complete. **Overwrite if filename exists** (last-write-wins; no 409). Server-side soft cap configurable via env `LIBRARY_MAX_BYTES` (default 50 GB) — purely a guardrail against runaway uploads, not a usage ceiling. Return `{"name": <name>, "size": <bytes>, "overwrote": <bool>}`. Append a `library.upload` event to a new top-level `state/library_events.jsonl` (audit trail for an action that has no session id).
+- [x] 4. **List endpoint.** `GET /library/files` returns `[{"name": …, "size": …, "mtime": …}, …]` sorted by mtime desc. Skips `.staging/` and dotfiles. **Lists every file in `state/library/` regardless of how it got there** — UI-uploaded *and* host-dropped files (`cp`/`rsync`/symlink into the directory) appear identically.
+- [x] 5. **Delete endpoint.** `DELETE /library/files/{name}` removes the file (path-guard against escapes via `Path(name).name`). Append `library.delete` event.
+- [x] 5b. **Health endpoint.** `GET /library/health` returns:
   - `total_bytes` (sum of all files, following symlinks where possible)
   - `file_count` (excluding `.staging/`)
   - `broken_symlinks: [{"name": …, "target": …}]` — entries where `os.readlink` resolves but the target doesn't exist *inside the container* (the `state/library/` mount path stays the same in the container, but symlinks pointing to host paths outside any bound mount will be unreachable from agents).
   - `staging_files: int` (count under `.staging/`; non-zero means an upload was interrupted — surface as a warning).
   - `disk_free_bytes` (host disk space available on `state/`'s filesystem, via `shutil.disk_usage`).
   Cheap O(N) walk; fine for v1.
-- [ ] 6. **Schemas.** Add `LibraryFile` and `LibraryHealth` to `api/schemas.py`.
+- [x] 6. **Schemas.** Add `LibraryFile` and `LibraryHealth` to `api/schemas.py`.
 
 ### Prompt
 
-- [ ] 7. **Supervisor prompt — library awareness.** Replace the single `fs_read` line (`research/supervisor_prompt.md:16`) with a block that teaches the agent both the *read* path and the *upload* affordances, so the human can ask the supervisor directly ("how do I get my 80 GB genome in?") instead of having to know the system's plumbing. Proposed wording:
+- [x] 7. **Supervisor prompt — library awareness.** Replace the single `fs_read` line (`research/supervisor_prompt.md:16`) with a block that teaches the agent both the *read* path and the *upload* affordances, so the human can ask the supervisor directly ("how do I get my 80 GB genome in?") instead of having to know the system's plumbing. Proposed wording:
 
   ```markdown
   - Use `fs_read` to read files in:
@@ -48,7 +49,7 @@ Researchers re-run experiments and follow-up sessions on the same dataset; the p
 
   Keep this as a prompt-level instruction (not a hard rule); the "Hard rules" section stays focused on system-modification boundaries.
 
-- [ ] 7b. **Evolution-agent prompt — library awareness.** Update `evolution/evolution_prompt.md` so the evolution agent (which has full read access to the codebase via `bash_ro` and read+write access to its worktree) understands the upload story. It needs this for two reasons: (1) users may ask it the same upload questions and we don't want a hallucinated answer, (2) when the user instructs it to add features that touch file flows, it should reason about the existing affordances rather than inventing new ones. Add a section:
+- [x] 7b. **Evolution-agent prompt — library awareness.** Update `evolution/evolution_prompt.md` so the evolution agent (which has full read access to the codebase via `bash_ro` and read+write access to its worktree) understands the upload story. It needs this for two reasons: (1) users may ask it the same upload questions and we don't want a hallucinated answer, (2) when the user instructs it to add features that touch file flows, it should reason about the existing affordances rather than inventing new ones. Add a section:
 
   ```markdown
   ## Context library (read-only to you and to research agents)
@@ -64,12 +65,12 @@ Researchers re-run experiments and follow-up sessions on the same dataset; the p
 
 ### UI
 
-- [ ] 8. **Library panel in sidebar.** New `## Library` section above "Session History" in `ui/app.py`. Always visible (Research and Evolution modes), since the same files are useful in both contexts. Contents:
+- [x] 8. **Library panel in sidebar.** New `## Library` section above "Session History" in `ui/app.py`. Always visible (Research and Evolution modes), since the same files are useful in both contexts. Contents:
   - `st.file_uploader(accept_multiple_files=True)` — submits each selected file via `POST /library/files`. Caption underneath: "Files >5 GB? Drop them directly into `./state/library/` on the host — they'll appear here automatically."
   - List of existing files (name + size + age) pulled from `GET /library/files`, each with a 🗑️ delete button. Files dropped via host fs appear here too (no visual distinction; they're equivalent).
   - **Health badge** — small caption pulled from `GET /library/health`: total bytes used, free disk, and a red warning if `broken_symlinks` or `staging_files > 0`. Click to expand the details.
-- [ ] 9. **Library hint on welcome screen.** When starting a new research session, if the library is non-empty, render a `st.caption(f"📎 {n} file(s) in library will be available to the agent: {names}")` above the chat input. Informational; the actual auto-prepend happens server-side (step 9b).
-- [ ] 9b. **Auto-prepend library listing to supervisor's first turn.** In `research/runtime.py` (where the supervisor's first turn is constructed from the user's task), if `state/library/` is non-empty, prepend a system-generated context block of the form:
+- [x] 9. **Library hint on welcome screen.** When starting a new research session, if the library is non-empty, render a `st.caption(f"📎 {n} file(s) in library will be available to the agent: {names}")` above the chat input. Informational; the actual auto-prepend happens server-side (step 9b).
+- [x] 9b. **Auto-prepend library listing to supervisor's first turn.** In `research/runtime.py` (where the supervisor's first turn is constructed from the user's task), if `state/library/` is non-empty, prepend a system-generated context block of the form:
 
   ```
   Files currently in the user's library (state/library/, read via fs_read):
@@ -82,11 +83,11 @@ Researchers re-run experiments and follow-up sessions on the same dataset; the p
   ```
 
   Do this every research-session start, not just the welcome. Evolution sessions skip this (meta-agent operates on code).
-- [ ] 9c. **Streamlit upload size config.** Streamlit's default `maxUploadSize` is 200 MB. Add `.streamlit/config.toml` with `[server]\nmaxUploadSize = 5120` (5 GB) — sized for what's *practical* through a browser, not what the server allows. Bigger files go via host-side drop (step 8 caption). The server-side `LIBRARY_MAX_BYTES` (step 3) is independent and far higher; the two caps don't have to match.
+- [x] 9c. **Streamlit upload size config.** Streamlit's default `maxUploadSize` is 200 MB. Add `.streamlit/config.toml` with `[server]\nmaxUploadSize = 5120` (5 GB) — sized for what's *practical* through a browser, not what the server allows. Bigger files go via host-side drop (step 8 caption). The server-side `LIBRARY_MAX_BYTES` (step 3) is independent and far higher; the two caps don't have to match.
 
 ### Verification
 
-- [ ] 10. **Backend verification (per CLAUDE.md policy).**
+- [x] 10. **Backend verification (per CLAUDE.md policy).**
   1. `curl -F file=@/tmp/sample.csv http://127.0.0.1:8765/library/files` returns 200 with name+size; file appears at `state/library/sample.csv` on host.
   2. `curl http://127.0.0.1:8765/library/files` lists it.
   3. Drop a second file directly on the host: `cp /tmp/another.txt state/library/`. Confirm `GET /library/files` lists it identically (no UI distinction between upload paths).
@@ -97,8 +98,8 @@ Researchers re-run experiments and follow-up sessions on the same dataset; the p
   8. **Health endpoint test:** `curl http://127.0.0.1:8765/library/health` returns the expected shape. Create a deliberately broken symlink (`ln -s /nonexistent state/library/dead`) and confirm it's flagged.
   9. **Negative test:** try writing to library via `fs_write_workspace.write` with `path=state/library/x.txt` from inside an agent run; expect `PermissionError: writes outside scratch/results forbidden`.
   10. `curl -X DELETE .../library/files/sample.csv` removes the file. Health endpoint reflects the change.
-- [ ] 11. **Manual UI render check** (only after backend passes). Refresh http://127.0.0.1:8501; upload a file via the sidebar Library panel; start a session; verify it's listed in the welcome hint and the agent reaches it.
-- [ ] 12. **Roadmap entry.** Move from "Planned" to "Done" with the commit SHA.
+- [x] 11. **Manual UI render check** (only after backend passes). Refresh http://127.0.0.1:8501; upload a file via the sidebar Library panel; start a session; verify it's listed in the welcome hint and the agent reaches it.
+- [x] 12. **Roadmap entry.** Move from "Planned" to "Done" with the commit SHA.
 
 ## Files touched
 
@@ -155,4 +156,18 @@ open http://127.0.0.1:8501
 
 ## Notes
 
-(Append discoveries here as you work the steps. Don't rewrite earlier entries.)
+### 2026-05-07 — implementation + verification
+
+- Implemented in commit `94cfbd3`. All 10 verification sub-steps pass:
+  1. UI upload via `curl -F` works; chunked stream + atomic rename leaves `.staging/` empty.
+  2. `GET /library/files` lists uploaded file with size + mtime.
+  3. Host-drop test: `echo … > state/library/host_dropped.txt` shows in listing alongside UI-uploaded files. No visual distinction.
+  4. Re-upload returns `{"overwrote": true}`.
+  5. Research session `20260507-211255-b211a5` saw the auto-prepended library block (supervisor explicitly cited "the system-reminder showed" matching sizes), used `fs_read.list state/library/`, read both files, reported back filenames + first lines.
+  6. Affordance test `20260507-211335-c424ca` (100 GB sequencing dataset prompt): supervisor steered correctly to host-drop, gave exact `cp` and `ln -s` commands, distinguished `state/library/` vs `researcher_data/`, mentioned read-only constraint, gave practical advice on streaming + indexes.
+  7. Evolution affordance test `evo-20260507-211410-912b29`: agent inspected `tools/fs_read/server.py::_allowed_roots` and started enumerating the three read paths (state/library/, researcher_data/, session dirs). **Eventlog truncates `evolution.note` text to 400 chars** (`evolution/runtime.py:90`) — agent's full response is fine but only first 400 chars logged. Logged as **B2** in ROADMAP.
+  8. Health endpoint detects deliberately broken symlink (`ln -s /nonexistent_target_path_xyz`) and reports it.
+  9. Negative test: agent attempted `fs_write_workspace.write` to `state/library/x.txt`, got the expected `ERROR: writes outside scratch/results forbidden`, did not retry, reported correctly. File was never created. Sandbox invariant intact.
+  10. `DELETE` works; health reflects updated state. Path-traversal-resistant: `Path().name` strips `..`, leading-dot stripped, FastAPI route refuses URL-encoded slashes. Verified via `filename=../traverse.txt` (lands as `traverse.txt`, not outside library) and `DELETE /library/files/..` (404).
+
+- **Audit trail caveat:** `state/library_events.jsonl` only logs API-mediated actions (uploads, deletes). Host-side `cp`/`ln -s` adds don't write events. Acceptable for v1 — deletes via API still log, and the host fs is the user's territory.

@@ -25,12 +25,14 @@ R1, R5, R2 are being implemented in **parallel worktrees**. See [docs/plans/PARA
 | R4 | Tool-grounded critique pass before user-facing emission | 2 days; opt-in flag |
 | R7 | Skill library substrate (Voyager-style executable cache) | 2 days; evolution agent populates |
 | **B1** | Bug: container image missing pytest, so strict-path smoke gate always auto-rejects | Found during UI1 verification 2026-05-07. Dockerfile installs `.[science]` not `.[dev]`. Fix: install pytest in image (or include `.[dev]`) so `evolution/tools/propose_merge.py:_run_smoke` can succeed. |
+| **B2** | Bug: `evolution.note` events truncate text to 400 chars | Found during UI2 verification 2026-05-07. `evolution/runtime.py:90` does `text=block.text[:400]`. Means long agent narrations are unreadable in the events log. Trivial fix: drop the slice or raise the cap to 8000. |
 
 ## 🖥️ UI
 
 | ID | Feature | Status | Plan | Branch |
 |---|---|---|---|---|
 | **UI1** | Evolution pane in Streamlit chat | ✅ Done (backend-verified) | [UI1-evolution-pane.md](docs/plans/UI1-evolution-pane.md) | `feat/evolution_ui` |
+| **UI2** | Persistent context library (upload once, use everywhere) | ✅ Done (backend-verified) | [UI2-context-library.md](docs/plans/UI2-context-library.md) | `feat/evolution_ui` |
 
 ## 🔵 Later (deferred — needs evidence first)
 
