@@ -66,26 +66,108 @@ def confirm_deletion(session_id):
 # --- SIDEBAR: Navigation & HITL ---
 is_awaiting_human = False  # Used to trigger Green status
 
+# --- TOP-OF-PAGE MODE TOGGLE ---
+# Rendered before the sidebar so it sits at the very top of the main viewport.
+_mode_options = ["Research", "Evolution"]
+_current_mode_idx = _mode_options.index(st.session_state.mode)
+_toggle_col, _spacer = st.columns([0.35, 0.65])
+with _toggle_col:
+    if hasattr(st, "segmented_control"):
+        new_mode = st.segmented_control(
+            "Mode",
+            _mode_options,
+            default=st.session_state.mode,
+            label_visibility="collapsed",
+        )
+    else:
+        new_mode = st.radio(
+            "Mode",
+            _mode_options,
+            index=_current_mode_idx,
+            horizontal=True,
+            label_visibility="collapsed",
+        )
+if new_mode and new_mode != st.session_state.mode:
+    st.session_state.mode = new_mode
+    st.session_state.session_id = None
+    st.rerun()
+
 with st.sidebar:
-    # 0. MODE TOGGLE
-    new_mode = st.radio(
-        "Mode",
-        ["Research", "Evolution"],
-        index=0 if st.session_state.mode == "Research" else 1,
-        horizontal=True,
-    )
-    if new_mode != st.session_state.mode:
-        st.session_state.mode = new_mode
-        st.session_state.session_id = None
-        st.rerun()
-
-    st.divider()
-
     # 1. TOP: New Session
     new_label = "➕ New Research" if st.session_state.mode == "Research" else "➕ New Command"
     if st.button(new_label, type="primary", use_container_width=True):
         st.session_state.session_id = None
         st.rerun()
+
+    st.divider()
+
+    # 1b. LIBRARY (persistent, shared across all sessions)
+    st.header("Library")
+    try:
+        files_resp = requests.get(f"{API_URL}/library/files", timeout=5)
+        library_files = files_resp.json() if files_resp.status_code == 200 else []
+    except requests.exceptions.RequestException:
+        library_files = []
+
+    uploaded = st.file_uploader(
+        "Upload",
+        accept_multiple_files=True,
+        label_visibility="collapsed",
+        key=f"lib_uploader_{len(library_files)}",  # reset widget after each upload
+    )
+    if uploaded:
+        for f in uploaded:
+            try:
+                requests.post(
+                    f"{API_URL}/library/files",
+                    files={"file": (f.name, f.getvalue())},
+                    timeout=600,
+                )
+            except requests.exceptions.RequestException as e:
+                st.error(f"Upload failed for {f.name}: {e}")
+        st.rerun()
+
+    st.caption("Files >5 GB? Drop them into `./state/library/` on the host — they'll appear here.")
+
+    if library_files:
+        with st.container(height=180, border=False):
+            for lf in library_files:
+                col_l, col_r = st.columns([0.85, 0.15], vertical_alignment="center")
+                size_kb = lf["size"] / 1024
+                size_str = (f"{size_kb / 1024:.1f} MB" if size_kb >= 1024
+                            else f"{size_kb:.1f} KB" if size_kb >= 1
+                            else f"{lf['size']} B")
+                col_l.markdown(f"📎 **{lf['name']}**  \n<span style='color:#888;font-size:11px'>{size_str}</span>",
+                               unsafe_allow_html=True)
+                if col_r.button("🗑️", key=f"lib_del_{lf['name']}", help=f"Delete {lf['name']}"):
+                    try:
+                        requests.delete(f"{API_URL}/library/files/{lf['name']}", timeout=10)
+                    except requests.exceptions.RequestException:
+                        pass
+                    st.rerun()
+    else:
+        st.caption("No files in library yet.")
+
+    # Health badge
+    try:
+        health = requests.get(f"{API_URL}/library/health", timeout=5).json()
+        total_gb = health["total_bytes"] / (1024 ** 3)
+        free_gb = health["disk_free_bytes"] / (1024 ** 3)
+        warn = bool(health.get("broken_symlinks") or health.get("staging_files"))
+        badge = f"💾 {total_gb:.2f} GB used · {free_gb:.1f} GB free"
+        if warn:
+            st.error(badge + " ⚠️")
+            with st.expander("Library health warnings", expanded=False):
+                if health.get("broken_symlinks"):
+                    st.markdown("**Broken symlinks:**")
+                    for b in health["broken_symlinks"]:
+                        st.markdown(f"- `{b['name']}` → `{b['target']}` (target unreachable inside container)")
+                if health.get("staging_files"):
+                    st.markdown(f"**{health['staging_files']} interrupted upload(s)** under `.staging/` — safe to ignore unless persistent.")
+        else:
+            st.caption(badge)
+    except (requests.exceptions.RequestException, KeyError, ValueError):
+        st.caption("💾 Library health unavailable")
 
     st.divider()
 
@@ -191,6 +273,10 @@ if st.session_state.session_id is None:
 
     if mode == "Research":
         st.info("👋 Welcome! Enter your initial research question below to begin a new session.")
+        if library_files:
+            names = ", ".join(f["name"] for f in library_files[:6])
+            extra = "" if len(library_files) <= 6 else f" (+{len(library_files) - 6} more)"
+            st.caption(f"📎 {len(library_files)} file(s) in library available to the agent: {names}{extra}")
         if task_input := st.chat_input("What would you like to research?"):
             with st.spinner("Starting session..."):
                 try:

@@ -65,6 +65,8 @@ services:
         - ./state:/app/state
         - ./researcher_data:/app/researcher_data:ro
         - ./ui:/app/ui
+        # Streamlit reads config from /app/.streamlit/config.toml on startup.
+        - ./.streamlit:/app/.streamlit:ro
       command: ["streamlit", "run", "ui/app.py", "--server.port", "8501", "--server.address", "0.0.0.0"]
       depends_on:
         - coscientist-api

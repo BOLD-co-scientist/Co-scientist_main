@@ -1,0 +1,3 @@
+[server]
+# 5 GB. Bigger files go via host-side cp/rsync into ./state/library/.
+maxUploadSize = 5120

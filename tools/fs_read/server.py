@@ -14,6 +14,8 @@ def _allowed_roots(session_id: str) -> list[Path]:
     sd = settings.session_dir(session_id)
     return [
         settings.RESEARCHER_DATA.resolve(),
+        # User's persistent context library — populated via UI uploads or host-drop.
+        settings.LIBRARY.resolve(),
         (sd / "scratch").resolve(),
         (sd / "results").resolve(),
         (sd / "memory").resolve(),

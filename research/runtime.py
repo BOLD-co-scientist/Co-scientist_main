@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import datetime as _dt
 import json
+import os
 from typing import Any
 
 from claude_agent_sdk import (
@@ -24,6 +26,40 @@ from scaffold import bus, config_loader, eventlog, settings, spawn, tools_regist
 
 
 SUPERVISOR_AGENT_ID = "supervisor"
+
+
+def _format_size(n: int) -> str:
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if n < 1024 or unit == "TB":
+            return f"{n:.1f}{unit}" if unit != "B" else f"{n}{unit}"
+        n /= 1024
+    return f"{n:.1f}TB"
+
+
+def _library_listing_block() -> str:
+    """Render a short, agent-readable listing of state/library/ for prepending
+    to the supervisor's first turn. Empty string if library is empty/missing."""
+    settings.ensure_runtime_dirs()
+    entries: list[tuple[str, int, float]] = []
+    for p in settings.LIBRARY.iterdir():
+        if p.name.startswith(".") or p.name == ".staging":
+            continue
+        try:
+            stat = p.stat()
+            entries.append((p.name, stat.st_size, stat.st_mtime))
+        except OSError:
+            entries.append((p.name + " (broken symlink)", 0, 0.0))
+    if not entries:
+        return ""
+    entries.sort(key=lambda e: e[2], reverse=True)
+    lines = [f"- {name} ({_format_size(size)}, mtime {_dt.datetime.fromtimestamp(mt).isoformat(timespec='seconds')})"
+             if mt else f"- {name}"
+             for name, size, mt in entries]
+    return (
+        "Files currently in the user's library (state/library/, read via fs_read):\n"
+        + "\n".join(lines)
+        + "\n\nUser task:\n"
+    )
 
 
 def _build_options(session_id: str, task_text: str) -> ClaudeAgentOptions:
@@ -76,8 +112,11 @@ async def run_session(session_id: str, task_text: str) -> None:
 
     options = _build_options(session_id, task_text)
 
+    library_block = _library_listing_block()
+    first_turn = (library_block + task_text) if library_block else task_text
+
     async with ClaudeSDKClient(options=options) as client:
-        await client.query(task_text)
+        await client.query(first_turn)
         async for message in client.receive_response():
             text = _summarize_blocks(message)
             if isinstance(message, AssistantMessage):

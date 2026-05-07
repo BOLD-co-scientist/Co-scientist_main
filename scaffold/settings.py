@@ -10,6 +10,11 @@ STATE = ROOT / "state"
 SESSIONS = STATE / "sessions"
 GLOBAL_MEMORY = STATE / "memory" / "global.jsonl"
 EVOLUTIONS_ARCHIVE = STATE / "archive" / "evolutions"
+LIBRARY = STATE / "library"
+LIBRARY_STAGING = LIBRARY / ".staging"
+LIBRARY_EVENTS = STATE / "library_events.jsonl"
+# Soft cap for HTTP uploads only; host-drop has no cap. Override via env.
+LIBRARY_MAX_BYTES = int(os.environ.get("LIBRARY_MAX_BYTES", str(50 * 1024 * 1024 * 1024)))
 
 WORKTREES = ROOT / "worktrees"
 ROLES = ROOT / "roles"
@@ -25,6 +30,12 @@ MAX_TURNS = int(os.environ.get("COSCIENTIST_MAX_TURNS", "80"))
 
 PYEXEC_CPU_SECONDS = int(os.environ.get("COSCIENTIST_PYEXEC_CPU_SECONDS", "60"))
 PYEXEC_MEM_MB = int(os.environ.get("COSCIENTIST_PYEXEC_MEM_MB", "1024"))
+
+
+def ensure_runtime_dirs() -> None:
+    """Create global runtime directories that exist outside any session."""
+    LIBRARY.mkdir(parents=True, exist_ok=True)
+    LIBRARY_STAGING.mkdir(parents=True, exist_ok=True)
 
 
 def session_dir(session_id: str) -> Path:
