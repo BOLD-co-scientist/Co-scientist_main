@@ -1,4 +1,5 @@
 """File-IPC. Each agent has an inbox dir; messages are atomically written JSON."""
+
 from __future__ import annotations
 
 import time
@@ -48,6 +49,7 @@ def send(
         ref=msg_id,
         target=target,
         msg_kind=kind,
+        payload=payload,
     )
     return msg_id
 
@@ -70,6 +72,7 @@ def drain(session_id: str, agent_id: str) -> list[dict]:
             ref=rec.get("id"),
             sender=rec.get("from"),
             msg_kind=rec.get("kind"),
+            payload=rec.get("payload"),
         )
     return msgs
 
