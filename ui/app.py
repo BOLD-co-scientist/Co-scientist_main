@@ -1,9 +1,10 @@
-import streamlit as st
-import requests
 import json
-import time
 import shutil
+import time
 from pathlib import Path
+
+import requests
+import streamlit as st
 
 # Docker internal networking routes this to the API container
 API_URL = "http://coscientist-api:8765"
@@ -21,7 +22,7 @@ st.markdown(
         }
     </style>
     """,
-    unsafe_allow_html=True
+    unsafe_allow_html=True,
 )
 
 # Initialize session state variables
@@ -40,7 +41,9 @@ def is_evolution_session(sid: str) -> bool:
 # --- POP-UP MODALS ---
 @st.dialog("Delete Session?")
 def confirm_deletion(session_id):
-    st.warning(f"Are you sure you want to delete session **{session_id}**? This action cannot be undone.")
+    st.warning(
+        f"Are you sure you want to delete session **{session_id}**? This action cannot be undone."
+    )
 
     skip_future = st.checkbox("Don't ask me again")
 
@@ -62,6 +65,7 @@ def confirm_deletion(session_id):
 
     if col2.button("Cancel", use_container_width=True):
         st.rerun()
+
 
 # --- SIDEBAR: Navigation & HITL ---
 is_awaiting_human = False  # Used to trigger Green status
@@ -94,7 +98,9 @@ if new_mode and new_mode != st.session_state.mode:
 
 with st.sidebar:
     # 1. TOP: New Session
-    new_label = "➕ New Research" if st.session_state.mode == "Research" else "➕ New Command"
+    new_label = (
+        "➕ New Research" if st.session_state.mode == "Research" else "➕ New Command"
+    )
     if st.button(new_label, type="primary", use_container_width=True):
         st.session_state.session_id = None
         st.rerun()
@@ -127,21 +133,31 @@ with st.sidebar:
                 st.error(f"Upload failed for {f.name}: {e}")
         st.rerun()
 
-    st.caption("Files >5 GB? Drop them into `./state/library/` on the host — they'll appear here.")
+    st.caption(
+        "Files >5 GB? Drop them into `./state/library/` on the host — they'll appear here."
+    )
 
     if library_files:
         with st.container(height=180, border=False):
             for lf in library_files:
                 col_l, col_r = st.columns([0.85, 0.15], vertical_alignment="center")
                 size_kb = lf["size"] / 1024
-                size_str = (f"{size_kb / 1024:.1f} MB" if size_kb >= 1024
-                            else f"{size_kb:.1f} KB" if size_kb >= 1
-                            else f"{lf['size']} B")
-                col_l.markdown(f"📎 **{lf['name']}**  \n<span style='color:#888;font-size:11px'>{size_str}</span>",
-                               unsafe_allow_html=True)
-                if col_r.button("🗑️", key=f"lib_del_{lf['name']}", help=f"Delete {lf['name']}"):
+                size_str = (
+                    f"{size_kb / 1024:.1f} MB"
+                    if size_kb >= 1024
+                    else f"{size_kb:.1f} KB" if size_kb >= 1 else f"{lf['size']} B"
+                )
+                col_l.markdown(
+                    f"📎 **{lf['name']}**  \n<span style='color:#888;font-size:11px'>{size_str}</span>",
+                    unsafe_allow_html=True,
+                )
+                if col_r.button(
+                    "🗑️", key=f"lib_del_{lf['name']}", help=f"Delete {lf['name']}"
+                ):
                     try:
-                        requests.delete(f"{API_URL}/library/files/{lf['name']}", timeout=10)
+                        requests.delete(
+                            f"{API_URL}/library/files/{lf['name']}", timeout=10
+                        )
                     except requests.exceptions.RequestException:
                         pass
                     st.rerun()
@@ -151,8 +167,8 @@ with st.sidebar:
     # Health badge
     try:
         health = requests.get(f"{API_URL}/library/health", timeout=5).json()
-        total_gb = health["total_bytes"] / (1024 ** 3)
-        free_gb = health["disk_free_bytes"] / (1024 ** 3)
+        total_gb = health["total_bytes"] / (1024**3)
+        free_gb = health["disk_free_bytes"] / (1024**3)
         warn = bool(health.get("broken_symlinks") or health.get("staging_files"))
         badge = f"💾 {total_gb:.2f} GB used · {free_gb:.1f} GB free"
         if warn:
@@ -161,9 +177,13 @@ with st.sidebar:
                 if health.get("broken_symlinks"):
                     st.markdown("**Broken symlinks:**")
                     for b in health["broken_symlinks"]:
-                        st.markdown(f"- `{b['name']}` → `{b['target']}` (target unreachable inside container)")
+                        st.markdown(
+                            f"- `{b['name']}` → `{b['target']}` (target unreachable inside container)"
+                        )
                 if health.get("staging_files"):
-                    st.markdown(f"**{health['staging_files']} interrupted upload(s)** under `.staging/` — safe to ignore unless persistent.")
+                    st.markdown(
+                        f"**{health['staging_files']} interrupted upload(s)** under `.staging/` — safe to ignore unless persistent."
+                    )
         else:
             st.caption(badge)
     except (requests.exceptions.RequestException, KeyError, ValueError):
@@ -174,7 +194,9 @@ with st.sidebar:
     # 2. MIDDLE: Session History (filtered by mode)
     st.header("Session History")
     if STATE_DIR.exists():
-        all_sessions = sorted([d.name for d in STATE_DIR.iterdir() if d.is_dir()], reverse=True)
+        all_sessions = sorted(
+            [d.name for d in STATE_DIR.iterdir() if d.is_dir()], reverse=True
+        )
         if st.session_state.mode == "Evolution":
             sessions = [s for s in all_sessions if is_evolution_session(s)]
         else:
@@ -188,8 +210,12 @@ with st.sidebar:
                 for sid in sessions:
                     col1, col2 = st.columns([0.8, 0.2], vertical_alignment="center")
 
-                    btn_type = "primary" if sid == st.session_state.session_id else "secondary"
-                    if col1.button(sid, key=f"hist_{sid}", type=btn_type, use_container_width=True):
+                    btn_type = (
+                        "primary" if sid == st.session_state.session_id else "secondary"
+                    )
+                    if col1.button(
+                        sid, key=f"hist_{sid}", type=btn_type, use_container_width=True
+                    ):
                         st.session_state.session_id = sid
                         st.rerun()
 
@@ -215,7 +241,9 @@ with st.sidebar:
     st.header("Human-in-the-Loop")
     if st.session_state.session_id:
         try:
-            hitl_resp = requests.get(f"{API_URL}/hitl/{st.session_state.session_id}/pending")
+            hitl_resp = requests.get(
+                f"{API_URL}/hitl/{st.session_state.session_id}/pending"
+            )
             if hitl_resp.status_code == 200:
                 pending = hitl_resp.json()
                 if not pending:
@@ -241,7 +269,10 @@ with st.sidebar:
                             rationale = payload.get("rationale", "")
                             diff_preview = payload.get("diff_preview", "")
 
-                            st.caption(f"branch: `{branch}`" + ("  •  ⚠ strict (smoke gated)" if strict else ""))
+                            st.caption(
+                                f"branch: `{branch}`"
+                                + ("  •  ⚠ strict (smoke gated)" if strict else "")
+                            )
                             if rationale:
                                 with st.expander("Rationale"):
                                     st.markdown(rationale)
@@ -252,12 +283,16 @@ with st.sidebar:
                         note = st.text_input("Optional Note", key=f"note_{req_id}")
                         c1, c2 = st.columns(2)
                         if c1.button("Approve", key=f"app_{req_id}", type="primary"):
-                            requests.post(f"{API_URL}/hitl/{st.session_state.session_id}/{req_id}/answer",
-                                          json={"decision": "approve", "note": note})
+                            requests.post(
+                                f"{API_URL}/hitl/{st.session_state.session_id}/{req_id}/answer",
+                                json={"decision": "approve", "note": note},
+                            )
                             st.rerun()
                         if c2.button("Reject", key=f"rej_{req_id}"):
-                            requests.post(f"{API_URL}/hitl/{st.session_state.session_id}/{req_id}/answer",
-                                          json={"decision": "reject", "note": note})
+                            requests.post(
+                                f"{API_URL}/hitl/{st.session_state.session_id}/{req_id}/answer",
+                                json={"decision": "reject", "note": note},
+                            )
                             st.rerun()
         except requests.exceptions.RequestException:
             st.error("Failed to connect to API for HITL status.")
@@ -272,15 +307,23 @@ if st.session_state.session_id is None:
     st.title(title_text)
 
     if mode == "Research":
-        st.info("👋 Welcome! Enter your initial research question below to begin a new session.")
+        st.info(
+            "👋 Welcome! Enter your initial research question below to begin a new session."
+        )
         if library_files:
             names = ", ".join(f["name"] for f in library_files[:6])
-            extra = "" if len(library_files) <= 6 else f" (+{len(library_files) - 6} more)"
-            st.caption(f"📎 {len(library_files)} file(s) in library available to the agent: {names}{extra}")
+            extra = (
+                "" if len(library_files) <= 6 else f" (+{len(library_files) - 6} more)"
+            )
+            st.caption(
+                f"📎 {len(library_files)} file(s) in library available to the agent: {names}{extra}"
+            )
         if task_input := st.chat_input("What would you like to research?"):
             with st.spinner("Starting session..."):
                 try:
-                    resp = requests.post(f"{API_URL}/research/sessions", json={"task": task_input}).json()
+                    resp = requests.post(
+                        f"{API_URL}/research/sessions", json={"task": task_input}
+                    ).json()
                     st.session_state.session_id = resp["session_id"]
                     st.rerun()
                 except Exception as e:
@@ -294,7 +337,9 @@ if st.session_state.session_id is None:
         if cmd_input := st.chat_input("What should the meta-agent change?"):
             with st.spinner("Dispatching evolution agent..."):
                 try:
-                    resp = requests.post(f"{API_URL}/evolution/commands", json={"command": cmd_input}).json()
+                    resp = requests.post(
+                        f"{API_URL}/evolution/commands", json={"command": cmd_input}
+                    ).json()
                     st.session_state.session_id = resp["session_id"]
                     st.rerun()
                 except Exception as e:
@@ -313,9 +358,15 @@ else:
                 if lines:
                     last_event = json.loads(lines[-1])
                     if last_event.get("kind") in [
-                        "session.ended", "session.end", "session.error", "session.fatal",
-                        "evolution.end", "evolution.merged", "evolution.rejected",
-                        "evolution.auto_reject", "evolution.crashed",
+                        "session.ended",
+                        "session.end",
+                        "session.error",
+                        "session.fatal",
+                        "evolution.end",
+                        "evolution.merged",
+                        "evolution.rejected",
+                        "evolution.auto_reject",
+                        "evolution.crashed",
                     ]:
                         is_dead = True
         except Exception:
@@ -344,22 +395,33 @@ else:
                 <span style="color: #888; font-size: 15px; font-weight: 500;">{status_text}</span>
             </div>
             """,
-            unsafe_allow_html=True
+            unsafe_allow_html=True,
         )
 
     # --- MAIN UI: Event stream ---
     if events_file.exists():
         with open(events_file, "r") as f:
-            for line in f:
+            all_lines = [line for line in f if line.strip()]
+            last100_lines = all_lines[-100:]
+
+            for i, line in enumerate(last100_lines):
                 try:
                     event = json.loads(line)
                     actor = event.get("actor", "assistant")
-                    role = "user" if actor in ["human", "user"] else "assistant"
+                    # role = "user" if actor in ["human", "user"] else "assistant"
                     kind = event.get("kind", "")
 
                     # Consolidate text extraction
-                    payload = event.get("payload", {})
-                    text = event.get("text") or payload.get("text") or event.get("summary")
+                    hastext = bool(
+                        event.get("text", False)
+                        or event.get("payload", {}).get("text", False)
+                        or event.get("summary", False)
+                        or (actor == "human" and event.get("command", False))
+                        or (actor == "human" and event.get("task", False))
+                    )
+
+                    if not hastext and i < len(last100_lines) - 10:
+                        continue
 
                     if kind == "research.requested":
                         with st.chat_message("user"):
@@ -367,44 +429,63 @@ else:
 
                     elif kind == "evolution.requested":
                         with st.chat_message("user"):
-                            st.markdown(f"**Evolution Command:**\n {event.get('command')}")
+                            st.markdown(
+                                f"**Evolution Command:**\n {event.get('command')}"
+                            )
 
                     elif kind == "evolution.proposal":
                         with st.chat_message("assistant"):
                             ref = event.get("ref", "?")
                             strict_flag = " ⚠ strict" if event.get("strict") else ""
-                            st.markdown(f"**Merge proposal** archived as `{ref}`{strict_flag}")
+                            st.markdown(
+                                f"**Merge proposal** archived as `{ref}`{strict_flag}"
+                            )
 
                     elif kind == "evolution.merged":
                         with st.chat_message("assistant"):
-                            st.success(f"✅ Merged: `{event.get('ref', '?')}`. Restart sessions to pick up changes.")
+                            st.success(
+                                f"✅ Merged: `{event.get('ref', '?')}`. Restart sessions to pick up changes."
+                            )
+
+                    elif kind == "evolution.note":
+                        with st.chat_message("assistant"):
+                            st.success(
+                                f"📒 Noted: `{event.get('text', 'Empty Notes')}` "
+                            )
 
                     elif kind in ("evolution.rejected", "evolution.auto_reject"):
                         with st.chat_message("assistant"):
-                            st.error(f"❌ {kind.split('.')[-1].replace('_', ' ').title()}: `{event.get('ref', '?')}`")
+                            st.error(
+                                f"❌ {kind.split('.')[-1].replace('_', ' ').title()}: `{event.get('ref', '?')}`"
+                            )
 
                     elif kind == "evolution.crashed":
                         with st.chat_message("assistant"):
-                            st.error(f"💥 Evolution agent crashed: {event.get('error', 'unknown')}")
+                            st.error(
+                                f"💥 Evolution agent crashed: {event.get('error', 'unknown')}"
+                            )
 
-                    elif role == "user" and text:
-                        # Catch mid-session human messages ("Hello world", directives, etc.)
+                    elif actor == "human" and event.get("text"):  # human feedback
                         with st.chat_message("user"):
-                            st.markdown(text)
+                            st.markdown(event.get("text"))
 
                     elif kind == "bus.send":
                         target = event.get("target", "unknown")
                         msg_kind = event.get("msg_kind", "message")
 
-                        if text:
+                        if event.get("payload", {}).get("text", None):
                             with st.chat_message("assistant"):
-                                st.markdown(f"**To {target}:**\n{text}")
+                                st.markdown(
+                                    f"**To {target}:**\n{event.get("payload").get("text")}"
+                                )
                         else:
-                            with st.expander(f"✉️ {msg_kind.capitalize()} sent to {target}"):
+                            with st.expander(
+                                f"✉️ {msg_kind.capitalize()} sent to {target}"
+                            ):
                                 st.json(event)
 
                     elif kind == "session.turn_result":
-                        summary_text = text if text else "Complete"
+                        summary_text = event.get("summary", None) or "Complete"
                         with st.expander(f"🔄 Turn Result: {summary_text}"):
                             st.json(event)
 
@@ -423,7 +504,7 @@ else:
         if prompt := st.chat_input("Send a directive to the supervisor..."):
             requests.post(
                 f"{API_URL}/research/sessions/{st.session_state.session_id}/messages",
-                json={"text": prompt}
+                json={"text": prompt},
             )
             st.rerun()
     else:
@@ -440,7 +521,10 @@ else:
                 try:
                     requests.post(
                         f"{API_URL}/evolution/commands",
-                        json={"command": followup, "session_id": st.session_state.session_id},
+                        json={
+                            "command": followup,
+                            "session_id": st.session_state.session_id,
+                        },
                     )
                     st.rerun()
                 except Exception as e:
