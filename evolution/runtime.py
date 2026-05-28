@@ -1,6 +1,7 @@
 """Evolution-agent entry point. Single fresh process per command. Self-edits
 are safe because the running process never patches itself in-flight — the
 *next* invocation reads the new code from the bind-mounted source."""
+
 from __future__ import annotations
 
 import argparse
@@ -14,11 +15,9 @@ from claude_agent_sdk import (
     TextBlock,
     ToolUseBlock,
 )
-
-from scaffold import config_loader, eventlog, sandbox, settings
-from scaffold._atomic import write_json
 from evolution.tools import bash_ro, bash_sandbox, edit, propose_merge, run_tests
-from scaffold import system_tools
+from scaffold import config_loader, eventlog, sandbox, settings, system_tools
+from scaffold._atomic import write_json
 
 
 EVOLUTION_AGENT_ID = "evolution"
@@ -26,11 +25,15 @@ EVOLUTION_AGENT_ID = "evolution"
 
 def _slugify(text: str) -> str:
     s = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
-    return (s[:40] or "evolve")
+    return s[:40] or "evolve"
 
 
-def _build_options(session_id: str, command: str, wt: sandbox.Worktree) -> ClaudeAgentOptions:
-    prompt_template = (settings.ROOT / "evolution" / "evolution_prompt.md").read_text(encoding="utf-8")
+def _build_options(
+    session_id: str, command: str, wt: sandbox.Worktree
+) -> ClaudeAgentOptions:
+    prompt_template = (settings.ROOT / "evolution" / "evolution_prompt.md").read_text(
+        encoding="utf-8"
+    )
     system_prompt = config_loader.render(
         prompt_template,
         WORKTREE_PATH=str(wt.path),
@@ -71,8 +74,12 @@ async def run_command(session_id: str, command: str) -> None:
     sandbox.ensure_repo()
     wt = sandbox.create(_slugify(command))
     eventlog.append(
-        session_id, actor=EVOLUTION_AGENT_ID, kind="evolution.start",
-        command=command, worktree=str(wt.path), branch=wt.branch,
+        session_id,
+        actor=EVOLUTION_AGENT_ID,
+        kind="evolution.start",
+        command=command,
+        worktree=str(wt.path),
+        branch=wt.branch,
     )
 
     options = _build_options(session_id, command, wt)
@@ -87,7 +94,7 @@ async def run_command(session_id: str, command: str) -> None:
                                 session_id,
                                 actor=EVOLUTION_AGENT_ID,
                                 kind="evolution.note",
-                                text=block.text[:400],
+                                text=block.text,
                             )
                         elif isinstance(block, ToolUseBlock):
                             eventlog.append(
@@ -97,7 +104,9 @@ async def run_command(session_id: str, command: str) -> None:
                                 tool=block.name,
                             )
     except Exception as e:
-        eventlog.append(session_id, actor=EVOLUTION_AGENT_ID, kind="evolution.error", error=str(e))
+        eventlog.append(
+            session_id, actor=EVOLUTION_AGENT_ID, kind="evolution.error", error=str(e)
+        )
         # Worktree may still exist; leave it for human inspection.
         raise
     finally:

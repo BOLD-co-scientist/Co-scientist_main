@@ -14,7 +14,9 @@ LIBRARY = STATE / "library"
 LIBRARY_STAGING = LIBRARY / ".staging"
 LIBRARY_EVENTS = STATE / "library_events.jsonl"
 # Soft cap for HTTP uploads only; host-drop has no cap. Override via env.
-LIBRARY_MAX_BYTES = int(os.environ.get("LIBRARY_MAX_BYTES", str(50 * 1024 * 1024 * 1024)))
+LIBRARY_MAX_BYTES = int(
+    os.environ.get("LIBRARY_MAX_BYTES", str(50 * 1024 * 1024 * 1024))
+)
 
 WORKTREES = ROOT / "worktrees"
 ROLES = ROOT / "roles"
