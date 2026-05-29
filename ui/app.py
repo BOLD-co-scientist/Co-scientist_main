@@ -508,21 +508,15 @@ else:
             )
             st.rerun()
     else:
-        # Evolution agent is short-lived per command — there's no live process to direct.
-        # Offer a "queue another command in this session" form instead.
-        with st.form("evo_followup", clear_on_submit=True):
-            followup = st.text_area(
-                "Queue another command on this session",
-                placeholder="e.g. Now add a unit test for the critic role.",
-                height=80,
-            )
-            submitted = st.form_submit_button("Dispatch", type="primary")
-            if submitted and followup.strip():
+        # Evolution: dispatch a new command on this session.
+        placeholder = "Send another command..." if is_dead else "Evolution agent is running..."
+        if cmd := st.chat_input(placeholder, disabled=not is_dead):
+            with st.spinner("Dispatching evolution agent..."):
                 try:
                     requests.post(
                         f"{API_URL}/evolution/commands",
                         json={
-                            "command": followup,
+                            "command": cmd,
                             "session_id": st.session_state.session_id,
                         },
                     )
