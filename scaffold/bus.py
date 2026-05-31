@@ -6,6 +6,7 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any
+from datetime import datetime
 
 from . import eventlog, settings
 from ._atomic import read_json, write_json
@@ -34,7 +35,7 @@ def send(
     msg_id = uuid.uuid4().hex[:12]
     record = {
         "id": msg_id,
-        "ts": time.time(),
+        "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "from": sender,
         "to": target,
         "kind": kind,

@@ -9,6 +9,7 @@ import streamlit as st
 # Docker internal networking routes this to the API container
 API_URL = "http://coscientist-api:8765"
 STATE_DIR = Path("/app/state/sessions")
+from datetime import datetime
 
 st.set_page_config(page_title="Coscientist Chat", layout="wide")
 
@@ -30,12 +31,8 @@ if "session_id" not in st.session_state:
     st.session_state.session_id = None
 if "skip_delete_confirm" not in st.session_state:
     st.session_state.skip_delete_confirm = False
-if "mode" not in st.session_state:
-    st.session_state.mode = "Research"
-
-
-def is_evolution_session(sid: str) -> bool:
-    return sid.startswith("evo-")
+if "pending_delete_sid" not in st.session_state:
+    st.session_state.pending_delete_sid = None
 
 
 # --- POP-UP MODALS ---
@@ -52,56 +49,27 @@ def confirm_deletion(session_id):
         if skip_future:
             st.session_state.skip_delete_confirm = True
 
-        # Delete directory from the filesystem
         session_path = STATE_DIR / session_id
         if session_path.exists():
             shutil.rmtree(session_path)
 
-        # If the deleted session was currently open, clear the main screen
         if st.session_state.session_id == session_id:
             st.session_state.session_id = None
 
+        st.session_state.pending_delete_sid = None
         st.rerun()
 
     if col2.button("Cancel", use_container_width=True):
+        st.session_state.pending_delete_sid = None
         st.rerun()
 
 
 # --- SIDEBAR: Navigation & HITL ---
 is_awaiting_human = False  # Used to trigger Green status
 
-# --- TOP-OF-PAGE MODE TOGGLE ---
-# Rendered before the sidebar so it sits at the very top of the main viewport.
-_mode_options = ["Research", "Evolution"]
-_current_mode_idx = _mode_options.index(st.session_state.mode)
-_toggle_col, _spacer = st.columns([0.35, 0.65])
-with _toggle_col:
-    if hasattr(st, "segmented_control"):
-        new_mode = st.segmented_control(
-            "Mode",
-            _mode_options,
-            default=st.session_state.mode,
-            label_visibility="collapsed",
-        )
-    else:
-        new_mode = st.radio(
-            "Mode",
-            _mode_options,
-            index=_current_mode_idx,
-            horizontal=True,
-            label_visibility="collapsed",
-        )
-if new_mode and new_mode != st.session_state.mode:
-    st.session_state.mode = new_mode
-    st.session_state.session_id = None
-    st.rerun()
-
 with st.sidebar:
     # 1. TOP: New Session
-    new_label = (
-        "➕ New Research" if st.session_state.mode == "Research" else "➕ New Command"
-    )
-    if st.button(new_label, type="primary", use_container_width=True):
+    if st.button("➕ New Session", type="primary", use_container_width=True):
         st.session_state.session_id = None
         st.rerun()
 
@@ -131,7 +99,7 @@ with st.sidebar:
                 )
             except requests.exceptions.RequestException as e:
                 st.error(f"Upload failed for {f.name}: {e}")
-        st.rerun()
+        st.rerun()# if uploading a new file, immediately rerun
 
     st.caption(
         "Files >5 GB? Drop them into `./state/library/` on the host — they'll appear here."
@@ -194,13 +162,9 @@ with st.sidebar:
     # 2. MIDDLE: Session History (filtered by mode)
     st.header("Session History")
     if STATE_DIR.exists():
-        all_sessions = sorted(
+        sessions = sorted(
             [d.name for d in STATE_DIR.iterdir() if d.is_dir()], reverse=True
         )
-        if st.session_state.mode == "Evolution":
-            sessions = [s for s in all_sessions if is_evolution_session(s)]
-        else:
-            sessions = [s for s in all_sessions if not is_evolution_session(s)]
 
         if not sessions:
             st.caption("No past sessions found.")
@@ -222,7 +186,6 @@ with st.sidebar:
                     # Trash can delete button (Ensure use_container_width is NOT set here)
                     if col2.button("🗑️", key=f"del_{sid}", help="Delete session"):
                         if st.session_state.skip_delete_confirm:
-                            # Direct deletion
                             session_path = STATE_DIR / sid
                             if session_path.exists():
                                 shutil.rmtree(session_path)
@@ -230,8 +193,8 @@ with st.sidebar:
                                 st.session_state.session_id = None
                             st.rerun()
                         else:
-                            # Pop-up confirmation
-                            confirm_deletion(sid)
+                            st.session_state.pending_delete_sid = sid
+                            st.rerun()
     else:
         st.caption("No past sessions found.")
 
@@ -261,6 +224,22 @@ with st.sidebar:
                             payload = req.get("payload", {}) or {}
 
                         st.warning(f"Pending: {summary}")
+
+                        # Interrupt feedback: enter new instructions or end.
+                        # if kind == "interrupt_feedback":
+                        #     st.info(
+                        #         "Session interrupted. Type new instructions"
+                        #         " in the note field and click **Approve** to"
+                        #         " restart, or click **Reject** to end."
+                        #     )
+
+                        # Evolution-prompt HITL: enter command in note field.
+                        # if kind == "evolution_prompt":
+                        #     st.info(
+                        #         "Type your evolution command in the note field"
+                        #         " below and click **Approve**, or click"
+                        #         " **Reject** to end the session."
+                        #     )
 
                         # Evolution-merge HITL: render diff + rationale + branch.
                         if kind == "evolution_merge":
@@ -294,56 +273,43 @@ with st.sidebar:
                                 json={"decision": "reject", "note": note},
                             )
                             st.rerun()
+            else:
+                st.error(f"HITL API returned {hitl_resp.status_code}")
         except requests.exceptions.RequestException:
             st.error("Failed to connect to API for HITL status.")
     else:
         st.info("Select or start a session to view HITL requests.")
 
+# Re-open the deletion dialog on every rerun while a delete is pending.
+if st.session_state.pending_delete_sid:
+    confirm_deletion(st.session_state.pending_delete_sid)
+
 # --- MAIN UI: Header & Status Indicator ---
-mode = st.session_state.mode
-title_text = "Coscientist Chat" if mode == "Research" else "Coscientist — Evolution"
+title_text = "Coscientist Chat"
 
 if st.session_state.session_id is None:
     st.title(title_text)
-
-    if mode == "Research":
-        st.info(
-            "👋 Welcome! Enter your initial research question below to begin a new session."
+    st.info(
+        "👋 Welcome! Enter your initial research question below to begin a new session."
+    )
+    if library_files:
+        names = ", ".join(f["name"] for f in library_files[:6])
+        extra = (
+            "" if len(library_files) <= 6 else f" (+{len(library_files) - 6} more)"
         )
-        if library_files:
-            names = ", ".join(f["name"] for f in library_files[:6])
-            extra = (
-                "" if len(library_files) <= 6 else f" (+{len(library_files) - 6} more)"
-            )
-            st.caption(
-                f"📎 {len(library_files)} file(s) in library available to the agent: {names}{extra}"
-            )
-        if task_input := st.chat_input("What would you like to research?"):
-            with st.spinner("Starting session..."):
-                try:
-                    resp = requests.post(
-                        f"{API_URL}/research/sessions", json={"task": task_input}
-                    ).json()
-                    st.session_state.session_id = resp["session_id"]
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Error starting session: {e}")
-    else:
-        st.info(
-            "🧬 Evolution mode. Enter a command for the meta-agent — e.g. "
-            "*Add a critic subagent that reviews each generalist_researcher report.* "
-            "The agent will work in a sandboxed worktree and ask you to approve any merge."
+        st.caption(
+            f"📎 {len(library_files)} file(s) in library available to the agent: {names}{extra}"
         )
-        if cmd_input := st.chat_input("What should the meta-agent change?"):
-            with st.spinner("Dispatching evolution agent..."):
-                try:
-                    resp = requests.post(
-                        f"{API_URL}/evolution/commands", json={"command": cmd_input}
-                    ).json()
-                    st.session_state.session_id = resp["session_id"]
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Error starting evolution session: {e}")
+    if task_input := st.chat_input("What would you like to research?"):
+        with st.spinner("Starting session..."):
+            try:
+                resp = requests.post(
+                    f"{API_URL}/research/sessions", json={"task": task_input}
+                ).json()
+                st.session_state.session_id = resp["session_id"]
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error starting session: {e}")
 
 else:
     events_file = STATE_DIR / st.session_state.session_id / "events.jsonl"
@@ -362,11 +328,7 @@ else:
                         "session.end",
                         "session.error",
                         "session.fatal",
-                        "evolution.end",
-                        "evolution.merged",
-                        "evolution.rejected",
-                        "evolution.auto_reject",
-                        "evolution.crashed",
+                        "session.crashed",
                     ]:
                         is_dead = True
         except Exception:
@@ -383,8 +345,8 @@ else:
         status_color = "#fd7e14"  # Orange
         status_text = "Processing..."
 
-    # Render Header with Status Dot
-    col1, col2 = st.columns([0.7, 0.3])
+    # Render Header with Status Dot + Stop button
+    col1, col2, col3 = st.columns([0.6, 0.25, 0.15])
     with col1:
         st.title(title_text)
     with col2:
@@ -397,6 +359,18 @@ else:
             """,
             unsafe_allow_html=True,
         )
+    with col3:
+        if not is_dead and not is_awaiting_human:
+            st.markdown("<div style='padding-top: 30px;'></div>", unsafe_allow_html=True)
+            if st.button("Stop", type="secondary", use_container_width=True):
+                try:
+                    requests.post(
+                        f"{API_URL}/sessions/{st.session_state.session_id}/stop",
+                        timeout=5,
+                    )
+                except requests.exceptions.RequestException:
+                    st.error("Failed to stop session.")
+                st.rerun()
 
     # --- MAIN UI: Event stream ---
     if events_file.exists():
@@ -420,8 +394,11 @@ else:
                         or (actor == "human" and event.get("task", False))
                     )
 
-                    if not hastext and i < len(last100_lines) - 10:
+                    if (not hastext) and i < len(last100_lines) - 5:
                         continue
+                    if kind in ["session.turn_result", "checkpoint.resolved", "session.end", "hitl.pending", "hitl.answer"] and i < len(last100_lines) - 5:
+                        continue
+
 
                     if kind == "research.requested":
                         with st.chat_message("user"):
@@ -465,6 +442,14 @@ else:
                                 f"💥 Evolution agent crashed: {event.get('error', 'unknown')}"
                             )
 
+                    elif kind == "checkpoint.triggered":
+                        with st.chat_message("assistant"):
+                            n_event = event.get("event_count", "?")
+                            ckpt_summary = event.get("summary", "")
+                            st.markdown(
+                                f"📊 **Checkpoint** ({n_event} events)\n\n{ckpt_summary}"
+                            )
+
                     elif actor == "human" and event.get("text"):  # human feedback
                         with st.chat_message("user"):
                             st.markdown(event.get("text"))
@@ -490,7 +475,7 @@ else:
                             st.json(event)
 
                     else:
-                        with st.expander(f"⚙️ System Event: {kind}"):
+                        with st.expander(f"⚙️ System Event {event.get("ts", "")}: {kind}"):
                             st.json(event)
 
                 except json.JSONDecodeError:
@@ -499,31 +484,15 @@ else:
         st.info("Waiting for agent to initialize and log events...")
 
     # --- MAIN UI: Input ---
-    if mode == "Research":
-        # Mid-session directives go to the supervisor.
-        if prompt := st.chat_input("Send a directive to the supervisor..."):
-            requests.post(
-                f"{API_URL}/research/sessions/{st.session_state.session_id}/messages",
-                json={"text": prompt},
-            )
-            st.rerun()
-    else:
-        # Evolution: dispatch a new command on this session.
-        placeholder = "Send another command..." if is_dead else "Evolution agent is running..."
-        if cmd := st.chat_input(placeholder, disabled=not is_dead):
-            with st.spinner("Dispatching evolution agent..."):
-                try:
-                    requests.post(
-                        f"{API_URL}/evolution/commands",
-                        json={
-                            "command": cmd,
-                            "session_id": st.session_state.session_id,
-                        },
-                    )
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Error dispatching command: {e}")
+    # Chat input is disabled for active sessions — all human interaction
+    # goes through the HITL panel in the sidebar (checkpoints, interrupts,
+    # evolution prompts).
+    placeholder = "Session ended." if is_dead else "Use the HITL panel in the sidebar to interact."
+    st.chat_input(placeholder, disabled=True)
 
-    # Auto-refresh loop to pull new events
-    time.sleep(2)
-    st.rerun()
+    # Auto-refresh to pull new events.
+    # Skip when: session ended, HITL pending (user is interacting), or
+    # delete dialog is open.
+    if not is_dead and not is_awaiting_human and not st.session_state.pending_delete_sid:
+        time.sleep(2)
+        st.rerun()

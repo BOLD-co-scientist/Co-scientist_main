@@ -9,6 +9,7 @@ import json
 import os
 import shutil
 import time
+from datetime import datetime
 import uuid
 from pathlib import Path
 
@@ -24,6 +25,7 @@ app = FastAPI(title="coscientist", version="0.1.0")
 
 # In-process registry of running session tasks. Survives only while server is up.
 _RUNNING: dict[str, asyncio.Task] = {}
+_STOP_EVENTS: dict[str, asyncio.Event] = {}
 
 
 def _new_session_id() -> str:
@@ -44,24 +46,40 @@ settings.ensure_runtime_dirs()
 
 @app.post("/research/sessions", response_model=schemas.StartResearchResponse)
 async def start_research(req: schemas.StartResearchRequest):
-    from research.runtime import run_session
+    from research.runtime import follow_session
 
     sid = req.session_id or _new_session_id()
     settings.ensure_session_dirs(sid)
     eventlog.append(sid, actor="human", kind="research.requested", task=req.task)
 
-    task = asyncio.create_task(run_session(sid, req.task))
+    stop_event = asyncio.Event()
+    _STOP_EVENTS[sid] = stop_event
+
+    task = asyncio.create_task(follow_session(sid, req.task, stop_event))
     _RUNNING[sid] = task
 
     def _on_done(t: asyncio.Task):
         _RUNNING.pop(sid, None)
+        _STOP_EVENTS.pop(sid, None)
+        if t.cancelled():
+            return
         if t.exception():
             eventlog.append(
-                sid, actor="system", kind="research.crashed", error=str(t.exception())
+                sid, actor="system", kind="session.crashed", error=str(t.exception())
             )
 
     task.add_done_callback(_on_done)
     return schemas.StartResearchResponse(session_id=sid, task=req.task)
+
+
+@app.post("/sessions/{sid}/stop")
+async def stop_session(sid: str):
+    event = _STOP_EVENTS.get(sid)
+    if event is None:
+        raise HTTPException(404, "no running task for this session")
+    event.set()
+    hitl.reject_all_pending(sid)
+    return {"ok": True}
 
 
 @app.post("/research/sessions/{sid}/messages")
@@ -76,31 +94,6 @@ def post_human_directive(sid: str, body: schemas.HumanDirective):
         payload={"text": body.text},
     )
     return {"ok": True, "msg_id": msg_id}
-
-
-# ---------- evolution ----------
-
-
-@app.post("/evolution/commands", response_model=schemas.StartEvolutionResponse)
-async def start_evolution(req: schemas.StartEvolutionRequest):
-    from evolution.runtime import run_command
-
-    sid = req.session_id or ("evo-" + _new_session_id())
-    settings.ensure_session_dirs(sid)
-    eventlog.append(sid, actor="human", kind="evolution.requested", command=req.command)
-
-    task = asyncio.create_task(run_command(sid, req.command))
-    _RUNNING[sid] = task
-
-    def _on_done(t: asyncio.Task):
-        _RUNNING.pop(sid, None)
-        if t.exception():
-            eventlog.append(
-                sid, actor="system", kind="evolution.crashed", error=str(t.exception())
-            )
-
-    task.add_done_callback(_on_done)
-    return schemas.StartEvolutionResponse(session_id=sid, command=req.command)
 
 
 # ---------- library ----------
