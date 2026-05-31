@@ -5,6 +5,7 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any
+from datetime import datetime
 
 from . import settings
 from ._atomic import append_jsonl
@@ -18,7 +19,7 @@ def append(session_id: str, actor: str, kind: str, **fields: Any) -> str:
     eid = uuid.uuid4().hex[:12]
     record = {
         "id": eid,
-        "ts": time.time(),
+        "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "session": session_id,
         "actor": actor,
         "kind": kind,

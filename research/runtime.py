@@ -10,7 +10,6 @@ import argparse
 import asyncio
 import datetime as _dt
 import json
-import os
 from typing import Any
 
 from claude_agent_sdk import (
@@ -21,8 +20,9 @@ from claude_agent_sdk import (
     TextBlock,
     ToolUseBlock,
 )
+from claude_agent_sdk.types import HookMatcher
 
-from scaffold import bus, config_loader, eventlog, settings, spawn, tools_registry
+from scaffold import bus, config_loader, eventlog, hitl, settings, spawn, tools_registry
 
 
 SUPERVISOR_AGENT_ID = "supervisor"
@@ -62,7 +62,9 @@ def _library_listing_block() -> str:
     )
 
 
-def _build_options(session_id: str, task_text: str) -> ClaudeAgentOptions:
+def _build_options(
+    session_id: str, task_text: str, event_state: dict
+) -> ClaudeAgentOptions:
     sup = config_loader.load_supervisor()
     subs = config_loader.list_subagent_roles()
 
@@ -77,6 +79,59 @@ def _build_options(session_id: str, task_text: str) -> ClaudeAgentOptions:
 
     agents = spawn.build_agent_definitions(subs)
 
+    _DEFER = {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "defer",
+        },
+    }
+    _ALLOW = {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "allow",
+        },
+    }
+
+    async def _checkpoint_gate(hook_input, tool_use_id, context):
+        tool_name = hook_input.get("tool_name", "?")
+        agent_id = hook_input.get("agent_id")
+        if agent_id:
+            event_state.setdefault("_trace", []).append(f"SKIP:{tool_name}(agent={agent_id})")
+            return _ALLOW
+        if event_state.get("deferring"):
+            event_state.setdefault("_trace", []).append(f"BATCH_DEFER:{tool_name}")
+            return _DEFER
+
+        # --- Stop button: interrupt at the next supervisor tool call ---
+        stop_event = event_state.get("stop_event")
+        if stop_event is not None and stop_event.is_set():
+            stop_event.clear()
+            event_state["deferring"] = True
+            event_state["interrupted"] = True
+            event_state.setdefault("_trace", []).append(f"INTERRUPT:{tool_name}")
+            return _DEFER
+
+        event_state["event_count"] += 1
+        event_state.setdefault("_trace", []).append(f"{event_state['event_count']}:{tool_name}")
+        delta = event_state["event_count"] - event_state["last_checkpoint_count"]
+        if delta >= settings.CHECKPOINT_EVENT_INTERVAL:
+            event_state["deferring"] = True
+            return {
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "defer",
+                    "permissionDecisionReason": (
+                        f"Event checkpoint reached ({event_state['event_count']} events). "
+                        "Pausing for human review."
+                    ),
+                },
+            }
+        return _ALLOW
+
+    hooks = {
+        "PreToolUse": [HookMatcher(matcher=None, hooks=[_checkpoint_gate])],
+    }
+
     return ClaudeAgentOptions(
         system_prompt=system_prompt,
         model=sup.model,
@@ -86,6 +141,7 @@ def _build_options(session_id: str, task_text: str) -> ClaudeAgentOptions:
         max_turns=settings.MAX_TURNS,
         permission_mode="acceptEdits",
         cwd=str(settings.ROOT),
+        hooks=hooks,
     )
 
 
@@ -104,49 +160,196 @@ def _summarize_blocks(msg) -> str:
     return ""
 
 
-async def run_session(session_id: str, task_text: str) -> None:
+async def _process_message_stream(client, session_id: str, event_state: dict):
+    """Drain one response stream.
+
+    Event counting is handled by the PreToolUse hook — this function
+    only needs to log messages and forward reports.
+    """
+    result = None
+
+    async for message in client.receive_response():
+        if isinstance(message, AssistantMessage):
+            for block in message.content:
+                if isinstance(block, TextBlock) and block.text.strip():
+                    bus.send(
+                        session_id,
+                        sender=SUPERVISOR_AGENT_ID,
+                        target="human",
+                        kind="report",
+                        payload={"text": block.text},
+                    )
+                    event_state["last_report_text"] = block.text
+                elif isinstance(block, ToolUseBlock):
+                    eventlog.append(
+                        session_id,
+                        actor=SUPERVISOR_AGENT_ID,
+                        kind="tool.use",
+                        tool=block.name,
+                        input_summary=_short_input(block.input),
+                    )
+        elif isinstance(message, ResultMessage):
+            result = message
+            eventlog.append(
+                session_id,
+                actor="system",
+                kind="session.turn_result",
+                summary=_summarize_blocks(message),
+            )
+
+    return result
+
+
+async def run_session(
+    session_id: str, task_text: str, stop_event: "asyncio.Event | None" = None
+) -> bool:
+    """Run the research agent.
+
+    Returns ``True`` when research finishes normally (the evolution loop
+    should follow).  Returns ``False`` when the human interrupted and
+    chose *not* to continue — the caller should skip the evolution loop
+    and end the session.
+    """
     settings.ensure_session_dirs(session_id)
     eventlog.append(
         session_id, actor="system", kind="session.start", task=task_text
     )
 
-    options = _build_options(session_id, task_text)
+    event_state = {
+        "event_count": 0,
+        "last_checkpoint_count": 0,
+        "stop_event": stop_event,
+    }
+
+    options = _build_options(session_id, task_text, event_state)
 
     library_block = _library_listing_block()
     first_turn = (library_block + task_text) if library_block else task_text
 
     async with ClaudeSDKClient(options=options) as client:
         await client.query(first_turn)
-        async for message in client.receive_response():
-            text = _summarize_blocks(message)
-            if isinstance(message, AssistantMessage):
-                for block in message.content:
-                    if isinstance(block, TextBlock) and block.text.strip():
-                        # Auto-mirror narrative text as a report on the bus.
-                        bus.send(
-                            session_id,
-                            sender=SUPERVISOR_AGENT_ID,
-                            target="human",
-                            kind="report",
-                            payload={"text": block.text},
-                        )
-                    elif isinstance(block, ToolUseBlock):
-                        eventlog.append(
-                            session_id,
-                            actor=SUPERVISOR_AGENT_ID,
-                            kind="tool.use",
-                            tool=block.name,
-                            input_summary=_short_input(block.input),
-                        )
-            elif isinstance(message, ResultMessage):
+
+        while True:
+            result = await _process_message_stream(client, session_id, event_state)
+            if result is None:
+                break
+
+            deferred = getattr(result, "deferred_tool_use", None)
+            if deferred is None:
+                break
+
+            # ── Interrupt (Stop button) ─────────────────────────
+            if event_state.pop("interrupted", False):
+                event_state["deferring"] = False
                 eventlog.append(
-                    session_id,
-                    actor="system",
-                    kind="session.turn_result",
-                    summary=text,
+                    session_id, actor="system", kind="session.interrupted"
                 )
 
-    eventlog.append(session_id, actor="system", kind="session.end")
+                answer = await hitl.ask(
+                    session_id,
+                    kind="interrupt_feedback",
+                    summary=(
+                        "Session interrupted. Enter new instructions and"
+                        " approve, or reject to end the session."
+                    ),
+                    payload={},
+                    stop_event=stop_event,
+                )
+
+                decision = answer.get("decision", "reject")
+                new_instructions = (answer.get("note") or "").strip()
+
+                if decision in ("reject", "interrupted"):
+                    eventlog.append(
+                        session_id, actor="system", kind="research.complete",
+                        reason="stopped",
+                    )
+                    return False
+
+                if new_instructions:
+                    eventlog.append(
+                        session_id, actor="human", kind="human_directive",
+                        text=new_instructions,
+                    )
+                    await client.query(
+                        f"[Human interrupted with new instructions]\n{new_instructions}"
+                    )
+                else:
+                    await client.query("[Resuming after pause]")
+                continue
+
+            # ── Checkpoint ──────────────────────────────────────
+            count = event_state["event_count"]
+            trace = event_state.pop("_trace", [])
+            eventlog.append(
+                session_id,
+                actor=SUPERVISOR_AGENT_ID,
+                kind="checkpoint.triggered",
+                event_count=count,
+                deferred_tool=deferred.name,
+                hook_trace=trace,
+            )
+
+            await client.query(
+                "[Checkpoint] Briefly summarize your progress so far"
+                " and your plan for next steps. Do NOT call any tools"
+                " — just reply with text."
+            )
+            summary_result = await _process_message_stream(
+                client, session_id, event_state
+            )
+            summary_text = event_state.pop("last_report_text", "")
+
+            answer = await hitl.ask(
+                session_id,
+                kind="checkpoint",
+                summary=f"Checkpoint ({count} events).",
+                payload={
+                    "event_count": count,
+                    "agent_summary": summary_text,
+                    "deferred_tool": deferred.name,
+                    "deferred_input": _short_input(deferred.input),
+                },
+                stop_event=stop_event,
+            )
+
+            event_state["last_checkpoint_count"] = count
+            event_state["deferring"] = False
+
+            decision = answer.get("decision", "reject")
+            note = answer.get("note") or ""
+            eventlog.append(
+                session_id,
+                actor="human",
+                kind="checkpoint.resolved",
+                decision=decision,
+                note=note,
+            )
+
+            if decision == "reject":
+                if note:
+                    await client.query(f"[Session terminated by human] {note}")
+                else:
+                    eventlog.append(
+                        session_id, actor="system", kind="research.complete",
+                        reason="checkpoint_rejected",
+                    )
+                    return True
+
+            if decision == "interrupted":
+                eventlog.append(
+                    session_id, actor="system", kind="research.complete",
+                    reason="stopped",
+                )
+                return False
+
+            resume_msg = "[Checkpoint approved] Continue working."
+            if note:
+                resume_msg = f"[Checkpoint approved] [Human feedback] {note}"
+            await client.query(resume_msg)
+
+    eventlog.append(session_id, actor="system", kind="research.complete")
+    return True
 
 
 def _short_input(payload: Any) -> str:
@@ -154,18 +357,75 @@ def _short_input(payload: Any) -> str:
         s = json.dumps(payload, ensure_ascii=False)
     except Exception:
         s = str(payload)
-    return s[:200] + ("…" if len(s) > 200 else "")
+    return s
 
 
-async def follow_session(session_id: str, task_text: str) -> None:
-    """Outer loop: process one task, then poll the supervisor inbox for new
-    human_directive messages and continue until the human signals completion
-    or budget is exhausted.
+async def follow_session(
+    session_id: str, task_text: str, stop_event: "asyncio.Event | None" = None
+) -> None:
+    """Run research, then enter an evolution loop.
 
-    For v0 we run a single Claude session per directive; multi-directive
-    continuation across a single Claude session is a follow-up improvement.
+    The *stop_event* is checked by the PreToolUse hook inside
+    ``run_session`` — setting it defers the next tool call so the
+    human can redirect research without losing conversation context.
     """
-    await run_session(session_id, task_text)
+    try:
+        await _follow_session_inner(session_id, task_text, stop_event)
+    except asyncio.CancelledError:
+        eventlog.append(
+            session_id, actor="system", kind="session.end", reason="cancelled"
+        )
+        raise
+
+
+async def _follow_session_inner(
+    session_id: str, task_text: str, stop_event: "asyncio.Event | None" = None
+) -> None:
+    try:
+        completed = await run_session(session_id, task_text, stop_event)
+    except Exception as e:
+        eventlog.append(
+            session_id, actor="system", kind="research.crashed", error=str(e)
+        )
+        completed = True
+
+    if not completed:
+        eventlog.append(
+            session_id, actor="system", kind="session.end", reason="stopped"
+        )
+        return
+
+    while True:
+        answer = await hitl.ask(
+            session_id,
+            kind="evolution_prompt",
+            summary=(
+                "Research phase finished. Enter an evolution command and"
+                " approve, or reject to end the session."
+            ),
+            payload={},
+            stop_event=stop_event,
+        )
+
+        decision = answer.get("decision", "reject")
+        command = (answer.get("note") or "").strip()
+
+        if decision in ("reject", "interrupted") or not command:
+            break
+
+        from evolution.runtime import run_command
+
+        eventlog.append(
+            session_id, actor="human", kind="evolution.requested", command=command
+        )
+        try:
+            await run_command(session_id, command)
+        except Exception as e:
+            eventlog.append(
+                session_id, actor="system", kind="evolution.crashed", error=str(e)
+            )
+
+    eventlog.append(session_id, actor="system", kind="session.end")
 
 
 def main() -> None:

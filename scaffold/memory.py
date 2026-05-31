@@ -8,6 +8,7 @@ import time
 import uuid
 from pathlib import Path
 from typing import Iterator
+from datetime import datetime
 
 from rank_bm25 import BM25Okapi
 
@@ -70,21 +71,21 @@ def _recall(path: Path, query: str, k: int) -> list[dict]:
 
 def remember_agent(session_id: str, agent_id: str, text: str, **tags) -> str:
     rid = uuid.uuid4().hex[:12]
-    rec = {"id": rid, "ts": time.time(), "agent": agent_id, "text": text, "tags": tags}
+    rec = {"id": rid, "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "agent": agent_id, "text": text, "tags": tags}
     _append(settings.session_dir(session_id) / "memory" / "agent" / f"{agent_id}.jsonl", rec)
     return rid
 
 
 def remember_project(session_id: str, agent_id: str, text: str, **tags) -> str:
     rid = uuid.uuid4().hex[:12]
-    rec = {"id": rid, "ts": time.time(), "agent": agent_id, "text": text, "tags": tags}
+    rec = {"id": rid, "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "agent": agent_id, "text": text, "tags": tags}
     _append(settings.session_dir(session_id) / "memory" / "project" / "shared.jsonl", rec)
     return rid
 
 
 def remember_global(text: str, source: str, **tags) -> str:
     rid = uuid.uuid4().hex[:12]
-    rec = {"id": rid, "ts": time.time(), "source": source, "text": text, "tags": tags}
+    rec = {"id": rid, "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "source": source, "text": text, "tags": tags}
     _append(settings.GLOBAL_MEMORY, rec)
     return rid
 

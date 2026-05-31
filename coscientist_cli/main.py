@@ -8,6 +8,7 @@ Usage:
   coscientist status   <session_id>
   coscientist reset    --to-v0
 """
+
 from __future__ import annotations
 
 import argparse
@@ -22,6 +23,7 @@ from scaffold import settings
 
 def cmd_research(args):
     from research.runtime import run_session
+
     sid = args.session or _new_sid()
     asyncio.run(run_session(sid, args.task))
     print(f"session: {sid}")
@@ -29,6 +31,7 @@ def cmd_research(args):
 
 def cmd_evolve(args):
     from evolution.runtime import run_command
+
     sid = args.session or ("evo-" + _new_sid())
     asyncio.run(run_command(sid, args.command))
     print(f"session: {sid}")
@@ -36,6 +39,7 @@ def cmd_evolve(args):
 
 def cmd_api(args):
     import uvicorn
+
     uvicorn.run("api.server:app", host="0.0.0.0", port=8765, reload=False)
 
 
@@ -57,7 +61,22 @@ def cmd_reset(args):
         sys.exit(2)
     # Soft reset by checking out v0 tag if present.
     try:
-        subprocess.check_call(["git", "checkout", "v0", "--", "scaffold", "evolution", "research", "roles", "prompts", "tools", "api"], cwd=str(settings.ROOT))
+        subprocess.check_call(
+            [
+                "git",
+                "checkout",
+                "v0",
+                "--",
+                "scaffold",
+                "evolution",
+                "research",
+                "roles",
+                "prompts",
+                "tools",
+                "api",
+            ],
+            cwd=str(settings.ROOT),
+        )
         print("restored v0 sources; state/ and researcher_data/ preserved")
     except subprocess.CalledProcessError as e:
         print(f"reset failed (does v0 tag exist?): {e}", file=sys.stderr)
@@ -66,6 +85,7 @@ def cmd_reset(args):
 
 def _new_sid() -> str:
     import uuid
+
     return time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
 
 
