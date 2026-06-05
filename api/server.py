@@ -8,6 +8,7 @@ import asyncio
 import json
 import os
 import shutil
+import sys
 import time
 from datetime import datetime
 import uuid
@@ -23,13 +24,46 @@ from . import schemas
 app = FastAPI(title="coscientist", version="0.1.0")
 
 
-# In-process registry of running session tasks. Survives only while server is up.
-_RUNNING: dict[str, asyncio.Task] = {}
-_STOP_EVENTS: dict[str, asyncio.Event] = {}
+# Registry of running session subprocesses. Survives only while server is up.
+# Research/evolution runtimes run as fresh subprocesses (not in-process tasks)
+# so an evolution-agent merge under research/, scaffold/, tools/, roles/ or
+# prompts/ is picked up by the *next* session without restarting this server.
+_RUNNING: dict[str, asyncio.subprocess.Process] = {}
 
 
 def _new_session_id() -> str:
     return time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
+
+
+def _runtime_env() -> dict[str, str]:
+    """Environment for a runtime subprocess: make ``-m research.runtime``
+    resolve from the repo root and keep ROOT consistent with this server."""
+    env = dict(os.environ)
+    root = str(settings.ROOT)
+    existing = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = root + (os.pathsep + existing if existing else "")
+    env["COSCIENTIST_ROOT"] = root
+    return env
+
+
+async def _monitor_runtime(sid: str, proc: "asyncio.subprocess.Process", log_fh) -> None:
+    """Await a runtime subprocess, then clean up and log abnormal exits."""
+    try:
+        rc = await proc.wait()
+    finally:
+        _RUNNING.pop(sid, None)
+        hitl.clear_stop(sid)
+        try:
+            log_fh.close()
+        except Exception:
+            pass
+    if rc != 0:
+        eventlog.append(
+            sid,
+            actor="system",
+            kind="session.crashed",
+            error=f"runtime exited with code {rc}; see state/sessions/{sid}/runtime.log",
+        )
 
 
 @app.get("/health")
@@ -46,38 +80,41 @@ settings.ensure_runtime_dirs()
 
 @app.post("/research/sessions", response_model=schemas.StartResearchResponse)
 async def start_research(req: schemas.StartResearchRequest):
-    from research.runtime import follow_session
-
     sid = req.session_id or _new_session_id()
     settings.ensure_session_dirs(sid)
     eventlog.append(sid, actor="human", kind="research.requested", task=req.task)
 
-    stop_event = asyncio.Event()
-    _STOP_EVENTS[sid] = stop_event
+    # Clear any stale stop flag left over from a prior run reusing this sid.
+    hitl.clear_stop(sid)
 
-    task = asyncio.create_task(follow_session(sid, req.task, stop_event))
-    _RUNNING[sid] = task
-
-    def _on_done(t: asyncio.Task):
-        _RUNNING.pop(sid, None)
-        _STOP_EVENTS.pop(sid, None)
-        if t.cancelled():
-            return
-        if t.exception():
-            eventlog.append(
-                sid, actor="system", kind="session.crashed", error=str(t.exception())
-            )
-
-    task.add_done_callback(_on_done)
+    # Spawn the research runtime as a fresh subprocess. stdout+stderr are
+    # captured to runtime.log so a crash is diagnosable after the fact.
+    log_fh = open(settings.session_dir(sid) / "runtime.log", "ab")
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-m",
+        "research.runtime",
+        "--session",
+        sid,
+        "--task",
+        req.task,
+        cwd=str(settings.ROOT),
+        env=_runtime_env(),
+        stdout=log_fh,
+        stderr=log_fh,
+    )
+    _RUNNING[sid] = proc
+    asyncio.create_task(_monitor_runtime(sid, proc, log_fh))
     return schemas.StartResearchResponse(session_id=sid, task=req.task)
 
 
 @app.post("/sessions/{sid}/stop")
 async def stop_session(sid: str):
-    event = _STOP_EVENTS.get(sid)
-    if event is None:
+    if sid not in _RUNNING:
         raise HTTPException(404, "no running task for this session")
-    event.set()
+    # Signal the subprocess to wind down gracefully (preserves work), and
+    # unblock any HITL request it is currently waiting on.
+    hitl.request_stop(sid)
     hitl.reject_all_pending(sid)
     return {"ok": True}
 

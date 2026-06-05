@@ -30,7 +30,7 @@ MODEL_EVOLUTION = os.environ.get("COSCIENTIST_MODEL_EVOLUTION", "claude-opus-4-7
 
 MAX_TURNS = int(os.environ.get("COSCIENTIST_MAX_TURNS", "80"))
 
-CHECKPOINT_EVENT_INTERVAL = int(os.environ.get("COSCIENTIST_CHECKPOINT_EVENTS", "20"))
+CHECKPOINT_EVENT_INTERVAL = 10
 
 PYEXEC_CPU_SECONDS = int(os.environ.get("COSCIENTIST_PYEXEC_CPU_SECONDS", "60"))
 PYEXEC_MEM_MB = int(os.environ.get("COSCIENTIST_PYEXEC_MEM_MB", "1024"))
@@ -51,6 +51,7 @@ def ensure_session_dirs(session_id: str) -> Path:
     for sub in (
         "inbox",
         "status",
+        "control",
         "hitl/pending",
         "hitl/answered",
         "memory/agent",

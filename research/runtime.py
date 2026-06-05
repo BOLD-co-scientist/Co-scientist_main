@@ -4,6 +4,7 @@ Run as a long-lived task per session. Drains the supervisor's bus inbox between
 turns to receive human directives mid-session, dispatches subagents via the
 SDK Task tool, emits reports back via bus to `to="human"`.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -21,7 +22,6 @@ from claude_agent_sdk import (
     ToolUseBlock,
 )
 from claude_agent_sdk.types import HookMatcher
-
 from scaffold import bus, config_loader, eventlog, hitl, settings, spawn, tools_registry
 
 
@@ -52,9 +52,14 @@ def _library_listing_block() -> str:
     if not entries:
         return ""
     entries.sort(key=lambda e: e[2], reverse=True)
-    lines = [f"- {name} ({_format_size(size)}, mtime {_dt.datetime.fromtimestamp(mt).isoformat(timespec='seconds')})"
-             if mt else f"- {name}"
-             for name, size, mt in entries]
+    lines = [
+        (
+            f"- {name} ({_format_size(size)}, mtime {_dt.datetime.fromtimestamp(mt).isoformat(timespec='seconds')})"
+            if mt
+            else f"- {name}"
+        )
+        for name, size, mt in entries
+    ]
     return (
         "Files currently in the user's library (state/library/, read via fs_read):\n"
         + "\n".join(lines)
@@ -96,23 +101,28 @@ def _build_options(
         tool_name = hook_input.get("tool_name", "?")
         agent_id = hook_input.get("agent_id")
         if agent_id:
-            event_state.setdefault("_trace", []).append(f"SKIP:{tool_name}(agent={agent_id})")
+            event_state.setdefault("_trace", []).append(
+                f"SKIP:{tool_name}(agent={agent_id})"
+            )
             return _ALLOW
         if event_state.get("deferring"):
             event_state.setdefault("_trace", []).append(f"BATCH_DEFER:{tool_name}")
             return _DEFER
 
         # --- Stop button: interrupt at the next supervisor tool call ---
-        stop_event = event_state.get("stop_event")
-        if stop_event is not None and stop_event.is_set():
-            stop_event.clear()
+        # Cross-process: the stop signal is a flag file, not an in-memory
+        # event, so the API server can stop us while we run as a subprocess.
+        if hitl.is_stop_requested(session_id):
+            hitl.clear_stop(session_id)
             event_state["deferring"] = True
             event_state["interrupted"] = True
             event_state.setdefault("_trace", []).append(f"INTERRUPT:{tool_name}")
             return _DEFER
 
         event_state["event_count"] += 1
-        event_state.setdefault("_trace", []).append(f"{event_state['event_count']}:{tool_name}")
+        event_state.setdefault("_trace", []).append(
+            f"{event_state['event_count']}:{tool_name}"
+        )
         delta = event_state["event_count"] - event_state["last_checkpoint_count"]
         if delta >= settings.CHECKPOINT_EVENT_INTERVAL:
             event_state["deferring"] = True
@@ -200,25 +210,23 @@ async def _process_message_stream(client, session_id: str, event_state: dict):
     return result
 
 
-async def run_session(
-    session_id: str, task_text: str, stop_event: "asyncio.Event | None" = None
-) -> bool:
+async def run_session(session_id: str, task_text: str) -> bool:
     """Run the research agent.
 
     Returns ``True`` when research finishes normally (the evolution loop
     should follow).  Returns ``False`` when the human interrupted and
     chose *not* to continue — the caller should skip the evolution loop
     and end the session.
+
+    Stops are signalled cross-process via ``hitl.request_stop`` (a flag
+    file) rather than an in-memory event, so this can run as a subprocess.
     """
     settings.ensure_session_dirs(session_id)
-    eventlog.append(
-        session_id, actor="system", kind="session.start", task=task_text
-    )
+    eventlog.append(session_id, actor="system", kind="session.start", task=task_text)
 
     event_state = {
         "event_count": 0,
         "last_checkpoint_count": 0,
-        "stop_event": stop_event,
     }
 
     options = _build_options(session_id, task_text, event_state)
@@ -241,9 +249,7 @@ async def run_session(
             # ── Interrupt (Stop button) ─────────────────────────
             if event_state.pop("interrupted", False):
                 event_state["deferring"] = False
-                eventlog.append(
-                    session_id, actor="system", kind="session.interrupted"
-                )
+                eventlog.append(session_id, actor="system", kind="session.interrupted")
 
                 answer = await hitl.ask(
                     session_id,
@@ -253,7 +259,6 @@ async def run_session(
                         " approve, or reject to end the session."
                     ),
                     payload={},
-                    stop_event=stop_event,
                 )
 
                 decision = answer.get("decision", "reject")
@@ -261,14 +266,18 @@ async def run_session(
 
                 if decision in ("reject", "interrupted"):
                     eventlog.append(
-                        session_id, actor="system", kind="research.complete",
+                        session_id,
+                        actor="system",
+                        kind="research.complete",
                         reason="stopped",
                     )
                     return False
 
                 if new_instructions:
                     eventlog.append(
-                        session_id, actor="human", kind="human_directive",
+                        session_id,
+                        actor="human",
+                        kind="human_directive",
                         text=new_instructions,
                     )
                     await client.query(
@@ -313,7 +322,6 @@ async def run_session(
                     "deferred_tool": deferred.name,
                     "deferred_input": _short_input(deferred.input),
                 },
-                stop_event=stop_event,
             )
 
             event_state["last_checkpoint_count"] = count
@@ -334,14 +342,18 @@ async def run_session(
                     await client.query(f"[Session terminated by human] {note}")
                 else:
                     eventlog.append(
-                        session_id, actor="system", kind="research.complete",
+                        session_id,
+                        actor="system",
+                        kind="research.complete",
                         reason="checkpoint_rejected",
                     )
                     return True
 
             if decision == "interrupted":
                 eventlog.append(
-                    session_id, actor="system", kind="research.complete",
+                    session_id,
+                    actor="system",
+                    kind="research.complete",
                     reason="stopped",
                 )
                 return False
@@ -363,17 +375,15 @@ def _short_input(payload: Any) -> str:
     return s
 
 
-async def follow_session(
-    session_id: str, task_text: str, stop_event: "asyncio.Event | None" = None
-) -> None:
+async def follow_session(session_id: str, task_text: str) -> None:
     """Run research, then enter an evolution loop.
 
-    The *stop_event* is checked by the PreToolUse hook inside
-    ``run_session`` — setting it defers the next tool call so the
-    human can redirect research without losing conversation context.
+    A stop is requested via ``hitl.request_stop(session_id)`` (a flag file).
+    The PreToolUse hook inside ``run_session`` checks it and defers the next
+    tool call, so the human can redirect research without losing context.
     """
     try:
-        await _follow_session_inner(session_id, task_text, stop_event)
+        await _follow_session_inner(session_id, task_text)
     except asyncio.CancelledError:
         eventlog.append(
             session_id, actor="system", kind="session.end", reason="cancelled"
@@ -381,11 +391,9 @@ async def follow_session(
         raise
 
 
-async def _follow_session_inner(
-    session_id: str, task_text: str, stop_event: "asyncio.Event | None" = None
-) -> None:
+async def _follow_session_inner(session_id: str, task_text: str) -> None:
     try:
-        completed = await run_session(session_id, task_text, stop_event)
+        completed = await run_session(session_id, task_text)
     except Exception as e:
         eventlog.append(
             session_id, actor="system", kind="research.crashed", error=str(e)
@@ -407,7 +415,6 @@ async def _follow_session_inner(
                 " approve, or reject to end the session."
             ),
             payload={},
-            stop_event=stop_event,
         )
 
         decision = answer.get("decision", "reject")
