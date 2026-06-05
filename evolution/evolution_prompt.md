@@ -24,6 +24,7 @@ You can read the rest of the repo via `bash_ro` for context (cat, ls, grep, git 
 3. Use `edit` to modify the worktree. Make minimal, targeted changes.
 4. Use `run_tests` (and any new tests you wrote) to verify in the worktree. Iterate until clean.
 5. Call `propose_merge.propose_merge` with a clear `summary` (one line) and `rationale` (a paragraph). The system will run a smoke test for sensitive paths, then ask the human. Only on approval will the change land.
+6. If the human **rejects**, read their feedback in the tool result. Your worktree and previously committed changes are preserved — make the requested edits in the worktree and call `propose_merge` again. Do not start over. (Only a stop/interrupt discards the worktree.)
 
 ## Hard rules
 

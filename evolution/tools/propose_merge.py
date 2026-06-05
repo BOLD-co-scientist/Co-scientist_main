@@ -96,10 +96,29 @@ def make_server(session_id: str, wt: sandbox.Worktree):
             eventlog.append(session_id, actor="evolution", kind="evolution.merged", ref=str(archive_dir.name))
             return {"content": [{"type": "text", "text": f"MERGED. Archived at {archive_dir.name}. Restart sessions to pick up changes."}]}
         else:
-            note = decision.get("note", "")
+            decision_kind = decision.get("decision", "reject")
+            note = decision.get("note", "") or ""
             write_json(archive_dir / "decision.json", {"status": "rejected", "note": note})
-            sandbox.discard(wt)
-            eventlog.append(session_id, actor="evolution", kind="evolution.rejected", ref=str(archive_dir.name))
-            return {"content": [{"type": "text", "text": f"REJECTED. {note}"}]}
+
+            # A stop/interrupt tears the session down — discard the worktree.
+            # (reject_all_pending marks these with note=="stopped"; the stop
+            # flag yields decision=="interrupted".)
+            if decision_kind != "reject" or note == "stopped":
+                sandbox.discard(wt)
+                eventlog.append(session_id, actor="evolution", kind="evolution.rejected", ref=str(archive_dir.name))
+                return {"content": [{"type": "text", "text": f"REJECTED. {note}"}]}
+
+            # A genuine human reject keeps the worktree so the agent can revise
+            # in place and re-propose without losing its committed work.
+            eventlog.append(
+                session_id, actor="evolution", kind="evolution.rejected",
+                ref=str(archive_dir.name), retained=True,
+            )
+            return {"content": [{"type": "text", "text": (
+                f"REJECTED. {note}\n\n"
+                "Your worktree is preserved and your previous changes are still "
+                "committed on its branch. Address the feedback with further edits "
+                "in the worktree, then call propose_merge again — do NOT start over."
+            )}]}
 
     return create_sdk_mcp_server("propose_merge", "0.1.0", tools=[propose])

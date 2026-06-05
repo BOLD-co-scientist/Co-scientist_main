@@ -16,6 +16,31 @@ from ._atomic import read_json, write_json
 _POLL_INTERVAL = 0.5  # seconds
 
 
+def _stop_flag(session_id: str) -> Path:
+    return settings.session_dir(session_id) / "control" / "stop"
+
+
+def request_stop(session_id: str) -> None:
+    """Signal a running session (possibly in another process) to stop.
+
+    Cross-process safe: the runtime checks for this flag at tool boundaries
+    (PreToolUse hook) and while blocking in ``ask()``. Replaces the old
+    in-memory ``asyncio.Event`` so the runtime can run as a subprocess.
+    """
+    p = _stop_flag(session_id)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), encoding="utf-8")
+
+
+def is_stop_requested(session_id: str) -> bool:
+    return _stop_flag(session_id).exists()
+
+
+def clear_stop(session_id: str) -> None:
+    """Consume the stop flag (one-shot, mirrors the old ``event.clear()``)."""
+    _stop_flag(session_id).unlink(missing_ok=True)
+
+
 def _pending(session_id: str) -> Path:
     return settings.session_dir(session_id) / "hitl" / "pending"
 
@@ -94,15 +119,14 @@ async def ask(
     kind: str,
     summary: str,
     payload: Any,
-    *,
-    stop_event: "asyncio.Event | None" = None,
 ) -> dict:
     """Block until the human answers. Returns the full answered record.
 
-    If *stop_event* is provided and becomes set while we are polling,
-    the pending request is removed and a synthetic ``"interrupted"``
-    answer is returned immediately.  There is no timeout — the call
-    blocks indefinitely until the human responds or the task is stopped.
+    If a stop is requested for this session (via ``request_stop``) while we
+    are polling, the pending request is removed and a synthetic
+    ``"interrupted"`` answer is returned immediately.  There is no timeout —
+    the call blocks indefinitely until the human responds or the session is
+    stopped.
     """
     rid = uuid.uuid4().hex[:12]
     rec = {
@@ -121,8 +145,8 @@ async def ask(
     while True:
         if answered_path.exists():
             return read_json(answered_path)
-        if stop_event is not None and stop_event.is_set():
-            stop_event.clear()
+        if is_stop_requested(session_id):
+            clear_stop(session_id)
             pending_path.unlink(missing_ok=True)
             eventlog.append(
                 session_id, actor="system", kind="hitl.answer",
