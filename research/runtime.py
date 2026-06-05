@@ -291,9 +291,12 @@ async def run_session(
             )
 
             await client.query(
-                "[Checkpoint] Briefly summarize your progress so far"
-                " and your plan for next steps. Do NOT call any tools"
-                " — just reply with text."
+                "[Checkpoint] Summarize progress by role, then state next steps."
+                " Do NOT call any tools — just reply with text.\n"
+                "Format:\n"
+                "**Supervisor:** what you have done directly (planning, synthesis, communications).\n"
+                "**Subagents:** for each subagent launched, list its role, task, status, and key output.\n"
+                "**Next steps:** what you plan to do or delegate next."
             )
             summary_result = await _process_message_stream(
                 client, session_id, event_state

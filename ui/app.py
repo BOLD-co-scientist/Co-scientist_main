@@ -1,10 +1,10 @@
 import json
 import shutil
-import time
 from pathlib import Path
 
 import requests
 import streamlit as st
+from streamlit_autorefresh import st_autorefresh
 
 # Docker internal networking routes this to the API container
 API_URL = "http://coscientist-api:8765"
@@ -490,9 +490,8 @@ else:
     placeholder = "Session ended." if is_dead else "Use the HITL panel in the sidebar to interact."
     st.chat_input(placeholder, disabled=True)
 
-    # Auto-refresh to pull new events.
+    # Auto-refresh to pull new events (non-blocking via JavaScript timer).
     # Skip when: session ended, HITL pending (user is interacting), or
     # delete dialog is open.
     if not is_dead and not is_awaiting_human and not st.session_state.pending_delete_sid:
-        time.sleep(2)
-        st.rerun()
+        st_autorefresh(interval=2000, key=f"refresh_{st.session_state.session_id}")
