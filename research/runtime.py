@@ -223,6 +223,7 @@ async def run_session(session_id: str, task_text: str) -> bool:
     """
     settings.ensure_session_dirs(session_id)
     eventlog.append(session_id, actor="system", kind="session.start", task=task_text)
+    eventlog.append(session_id, actor="system", kind="evolution_live_check", marker="v3")
 
     event_state = {
         "event_count": 0,
