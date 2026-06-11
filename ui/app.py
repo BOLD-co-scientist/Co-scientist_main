@@ -11,7 +11,7 @@ import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 
 # Docker internal networking routes this to the API container
-API_URL = "http://coscientist-api:8765"
+API_URL = os.environ.get("COSCIENTIST_API_URL", "http://127.0.0.1:8765")
 STATE_DIR = Path("/app/state/sessions")
 from datetime import datetime
 
