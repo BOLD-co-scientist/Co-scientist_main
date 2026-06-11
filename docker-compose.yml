@@ -70,3 +70,21 @@ services:
       command: ["streamlit", "run", "ui/app.py", "--server.port", "8501", "--server.address", "0.0.0.0"]
       depends_on:
         - coscientist-api
+
+    reverse-proxy:
+        image: caddy:2.7-alpine
+        container_name: coscientist-proxy
+        ports:
+          - "80:80"
+          - "443:443"
+        volumes:
+          - ./Caddyfile:/etc/caddy/Caddyfile
+          - caddy_data:/data
+          - caddy_config:/config
+        restart: unless-stopped
+        depends_on:
+          - coscientist-ui
+
+        volumes:
+          caddy_data:
+          caddy_config:
