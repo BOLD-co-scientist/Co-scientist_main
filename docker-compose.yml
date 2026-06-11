@@ -1,43 +1,34 @@
 services:
-  coscientist:
-    build: .
-    image: coscientist:dev
-    container_name: coscientist
+  tailscale:
+    image: tailscale/tailscale:latest
+    container_name: coscientist-tailscale
+    hostname: coscientist-ui
     env_file: .env
     environment:
-      COSCIENTIST_ROOT: /app
-    # Default: no network. Tools that need internet run in coscientist-net (off by default).
-    network_mode: "none"
-    ports: []  # network_mode: none means we expose via host networking only — see profile below
+      TS_AUTHKEY: ${TAILSCALE_AUTHKEY}
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_AUTH_ONCE: "true"
+      TS_ACCEPT_DNS: "true"
     volumes:
-      # Persistent runtime state — survives restarts.
-      - ./state:/app/state
-      # Researcher datasets, read-only.
-      - ./researcher_data:/app/researcher_data:ro
-      # Live source. Bind-mounted so evolution-agent merges land on the host repo.
-      - ./scaffold:/app/scaffold
-      - ./research:/app/research
-      - ./evolution:/app/evolution
-      - ./tools:/app/tools
-      - ./roles:/app/roles
-      - ./prompts:/app/prompts
-      - ./api:/app/api
-      - ./bin:/app/bin
-      - ./tests:/app/tests
-      - ./worktrees:/app/worktrees
-    profiles: ["isolated"]
+      - ./tailscale-state:/var/lib/tailscale
+    restart: unless-stopped
+    networks:
+      - coscientist_net
 
-  # Default profile — same image, but with port mapping (network: bridge).
-  # Network access still tightly controlled at the tool layer.
   coscientist-api:
-    build: .
-    image: coscientist:dev
+    build:
+      context: .
+      args:
+        UID: ${UID}
+        GID: ${GID}
+    image: ${USER}_coscientist:dev
     container_name: coscientist-api
     env_file: .env
     environment:
       COSCIENTIST_ROOT: /app
-    ports:
-      - "127.0.0.1:8765:8765"
+    network_mode: service:tailscale
+    depends_on:
+      - tailscale
     volumes:
       - ./state:/app/state
       - ./researcher_data:/app/researcher_data:ro
@@ -51,40 +42,29 @@ services:
       - ./bin:/app/bin
       - ./tests:/app/tests
       - ./worktrees:/app/worktrees
-      
+
   coscientist-ui:
-      build: .
-      image: coscientist:dev
-      container_name: coscientist-ui
-      env_file: .env
-      environment:
-        COSCIENTIST_ROOT: /app
-      ports:
-        - "127.0.0.1:8501:8501"
-      volumes:
-        - ./state:/app/state
-        - ./researcher_data:/app/researcher_data:ro
-        - ./ui:/app/ui
-        # Streamlit reads config from /app/.streamlit/config.toml on startup.
-        - ./.streamlit:/app/.streamlit:ro
-      command: ["streamlit", "run", "ui/app.py", "--server.port", "8501", "--server.address", "0.0.0.0"]
-      depends_on:
-        - coscientist-api
+    build:
+      context: .
+      args:
+        UID: ${UID}
+        GID: ${GID}
+    image: ${USER}_coscientist:dev
+    container_name: coscientist-ui
+    env_file: .env
+    environment:
+      COSCIENTIST_ROOT: /app
+      COSCIENTIST_API_URL: http://127.0.0.1:8765
+    network_mode: service:tailscale
+    depends_on:
+      - coscientist-api
+    volumes:
+      - ./state:/app/state
+      - ./researcher_data:/app/researcher_data:ro
+      - ./ui:/app/ui
+      - ./.streamlit:/app/.streamlit:ro
+    command: ["streamlit", "run", "ui/app.py", "--server.port", "8501", "--server.address", "0.0.0.0"]
 
-    reverse-proxy:
-        image: caddy:2.7-alpine
-        container_name: coscientist-proxy
-        ports:
-          - "80:80"
-          - "443:443"
-        volumes:
-          - ./Caddyfile:/etc/caddy/Caddyfile
-          - caddy_data:/data
-          - caddy_config:/config
-        restart: unless-stopped
-        depends_on:
-          - coscientist-ui
-
-        volumes:
-          caddy_data:
-          caddy_config:
+networks:
+  coscientist_net:
+    driver: bridge
