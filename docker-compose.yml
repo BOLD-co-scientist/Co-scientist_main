@@ -9,8 +9,10 @@ services:
       TS_STATE_DIR: /var/lib/tailscale
       TS_AUTH_ONCE: "true"
       TS_ACCEPT_DNS: "true"
+      TS_SERVE_CONFIG: /config/tailscale_config.json
     volumes:
       - ./tailscale-state:/var/lib/tailscale
+      - ./tailscale_config.json:/config/tailscale_config.json:ro
     restart: unless-stopped
     networks:
       - coscientist_net
@@ -55,6 +57,7 @@ services:
     environment:
       COSCIENTIST_ROOT: /app
       COSCIENTIST_API_URL: http://127.0.0.1:8765
+      APP_PASSWORD_HASH: ${APP_PASSWORD_HASH}
     network_mode: service:tailscale
     depends_on:
       - coscientist-api
