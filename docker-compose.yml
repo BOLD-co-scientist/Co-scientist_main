@@ -42,6 +42,7 @@ services:
       - ./prompts:/app/prompts
       - ./api:/app/api
       - ./bin:/app/bin
+      - ./coscientist_cli:/app/coscientist_cli
       - ./tests:/app/tests
       - ./worktrees:/app/worktrees
 
@@ -57,7 +58,6 @@ services:
     environment:
       COSCIENTIST_ROOT: /app
       COSCIENTIST_API_URL: http://127.0.0.1:8765
-      APP_PASSWORD_HASH: ${APP_PASSWORD_HASH}
     network_mode: service:tailscale
     depends_on:
       - coscientist-api

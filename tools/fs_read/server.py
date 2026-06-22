@@ -22,11 +22,24 @@ def _allowed_roots(session_id: str) -> list[Path]:
     ]
 
 
+def _candidate_paths(session_id: str, p: str) -> list[Path]:
+    raw = Path(p).expanduser()
+    sd = settings.session_dir(session_id)
+    candidates: list[Path] = []
+    if not raw.is_absolute():
+        parts = raw.parts
+        if parts and parts[0] in {"scratch", "results", "memory"}:
+            candidates.append(sd / raw)
+        candidates.append(settings.ROOT / raw)
+    candidates.append(raw)
+    return [candidate.resolve() for candidate in candidates]
+
+
 def _resolve_safe(session_id: str, p: str) -> Path:
-    target = Path(p).expanduser().resolve()
-    for root in _allowed_roots(session_id):
-        if target == root or root in target.parents:
-            return target
+    for target in _candidate_paths(session_id, p):
+        for root in _allowed_roots(session_id):
+            if target == root or root in target.parents:
+                return target
     raise PermissionError(f"path outside allowed roots: {target}")
 
 

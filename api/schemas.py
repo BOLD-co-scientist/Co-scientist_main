@@ -15,6 +15,30 @@ class StartResearchResponse(BaseModel):
     task: str
 
 
+class AuthMe(BaseModel):
+    user_id: str
+    display_name: str
+    root: str
+
+
+class AgentKeyStatus(BaseModel):
+    has_custom_key: bool
+    default_available: bool
+
+
+class AgentKeyUpdate(BaseModel):
+    api_key: str
+
+
+class SessionSummary(BaseModel):
+    session_id: str
+    task: str | None = None
+    mtime: float
+    last_ts: str | None = None
+    last_kind: str | None = None
+    running: bool = False
+
+
 class HumanDirective(BaseModel):
     text: str
 
