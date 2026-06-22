@@ -93,6 +93,56 @@ def remove_after_merge(wt: Worktree) -> None:
     discard(wt)
 
 
+_LOG_FMT = "%H%x1f%P%x1f%an%x1f%at%x1f%D%x1f%s"
+_FIELD_SEP = "\x1f"
+
+
+def history(limit: int = 200) -> dict:
+    """Read-only snapshot of the full branch graph across *all* refs.
+
+    Returns ``{"commits": [...], "head": <sha|None>}`` where each commit is a
+    dict ``{sha, parents, author, ts, refs, subject}``. Parents drive the graph
+    edges; ``refs`` carries decoration names (main, evo/* branch tips, tags) so
+    the UI can colour merged history apart from in-flight evolution branches.
+    Never mutates the repo — safe to call on every UI refresh.
+    """
+    ensure_repo()
+    raw = _git(
+        "log",
+        "--all",
+        f"--max-count={int(limit)}",
+        f"--pretty=format:{_LOG_FMT}",
+    )
+    commits: list[dict] = []
+    for line in raw.splitlines():
+        if not line.strip():
+            continue
+        parts = line.split(_FIELD_SEP)
+        if len(parts) < 6:
+            continue
+        sha, parents, author, ts, decor, subject = parts[:6]
+        refs = [
+            r.strip().removeprefix("HEAD -> ").removeprefix("tag: ").strip()
+            for r in decor.split(",")
+            if r.strip()
+        ]
+        commits.append(
+            {
+                "sha": sha,
+                "parents": parents.split() if parents.strip() else [],
+                "author": author,
+                "ts": float(ts) if ts.strip() else 0.0,
+                "refs": [r for r in refs if r],
+                "subject": subject,
+            }
+        )
+    try:
+        head = _git("rev-parse", "HEAD").strip()
+    except GitError:
+        head = None
+    return {"commits": commits, "head": head}
+
+
 def in_worktree(wt: Worktree, p: Path) -> bool:
     """True iff `p` is inside the worktree path. The caller must use this guard."""
     try:

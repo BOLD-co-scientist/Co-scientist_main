@@ -51,7 +51,8 @@ services:
       - ./bin:/app/bin
       - ./tests:/app/tests
       - ./worktrees:/app/worktrees
-      
+      - ./.git:/app/.git
+
   coscientist-ui:
       build: .
       image: coscientist:dev

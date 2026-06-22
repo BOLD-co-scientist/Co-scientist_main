@@ -16,7 +16,7 @@ from pathlib import Path
 
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
-from scaffold import bus, config_loader, eventlog, hitl, memory, settings
+from scaffold import bus, config_loader, eventlog, hitl, memory, sandbox, settings
 
 from . import schemas
 
@@ -362,3 +362,18 @@ def search_memory(layer: str, q: str, k: int = 5, sid: str | None = None):
 @app.get("/sessions/{sid}/inbox/{agent}")
 def peek_inbox(sid: str, agent: str):
     return bus.peek(sid, agent)
+
+
+# ---------- git history (read-only) ----------
+
+
+@app.get("/git/history", response_model=schemas.GitHistory)
+def git_history(limit: int = 200):
+    """Full branch graph (all refs) for the UI to render. Read-only.
+
+    The UI container has no ``.git`` mount, so it must fetch this over HTTP from
+    the API container, which does."""
+    try:
+        return sandbox.history(limit=limit)
+    except sandbox.GitError as e:
+        raise HTTPException(500, f"git history failed: {e}")

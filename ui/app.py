@@ -26,6 +26,51 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+def _build_git_dot(commits, head):
+    """Render the full branch graph as Graphviz DOT.
+
+    Newest commits sit on top (rankdir=TB, edges child→parent). main history is
+    green, in-flight evo/* branch tips orange, HEAD drawn with a bold border."""
+    def esc(s):
+        return s.replace("\\", "\\\\").replace('"', '\\"')
+
+    lines = [
+        "digraph G {",
+        "rankdir=TB;",
+        'node [shape=box style="rounded,filled" fontname="monospace" fontsize=9];',
+        'edge [arrowsize=0.6 color="#888888"];',
+    ]
+    known = {c["sha"] for c in commits}
+    for c in commits:
+        sha = c["sha"]
+        refs = c.get("refs", []) or []
+        subj = c.get("subject", "") or ""
+        is_main = any(r == "main" or r.endswith("/main") for r in refs)
+        is_evo = any(r.startswith("evo/") for r in refs)
+        is_head = bool(head) and sha == head
+        if is_evo:
+            fill, border = "#ffe8cc", "#fd7e14"
+        elif is_main:
+            fill, border = "#d3f9d8", "#28a745"
+        else:
+            fill, border = "#f1f3f5", "#adb5bd"
+        subj_short = subj if len(subj) <= 38 else subj[:37] + "…"
+        label = esc(f"{sha[:7]}  {subj_short}")
+        if refs:
+            label += "\\n" + esc("[" + ", ".join(refs) + "]")
+        penwidth = "2.5" if is_head else "1"
+        lines.append(
+            f'"{sha}" [label="{label}" fillcolor="{fill}" '
+            f'color="{border}" penwidth={penwidth}];'
+        )
+    for c in commits:
+        for p in c.get("parents", []) or []:
+            if p in known:
+                lines.append(f'"{c["sha"]}" -> "{p}";')
+    lines.append("}")
+    return "\n".join(lines)
+
+
 # Initialize session state variables
 if "session_id" not in st.session_state:
     st.session_state.session_id = None
@@ -197,6 +242,28 @@ with st.sidebar:
                             st.rerun()
     else:
         st.caption("No past sessions found.")
+
+    st.divider()
+
+    # 2b. Evolution git graph — full branch graph across all refs.
+    # The UI container has no .git mount, so this comes from the API.
+    with st.expander("🌳 Evolution Git Graph", expanded=False):
+        try:
+            git_resp = requests.get(f"{API_URL}/git/history?limit=5", timeout=5)
+            git_history = git_resp.json() if git_resp.status_code == 200 else None
+        except requests.exceptions.RequestException:
+            git_history = None
+
+        if git_history and git_history.get("commits"):
+            st.graphviz_chart(
+                _build_git_dot(git_history["commits"], git_history.get("head")),
+                use_container_width=True,
+            )
+            st.caption("🟢 main · 🟠 in-flight evo/* · bold border = HEAD")
+        elif git_history is not None:
+            st.caption("No commits yet.")
+        else:
+            st.caption("Git graph unavailable (API unreachable).")
 
     st.divider()
 

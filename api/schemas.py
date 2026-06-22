@@ -65,3 +65,17 @@ class LibraryHealth(BaseModel):
     disk_free_bytes: int
     staging_files: int
     broken_symlinks: list[dict[str, str]]
+
+
+class GitCommit(BaseModel):
+    sha: str
+    parents: list[str]
+    author: str
+    ts: float
+    refs: list[str]
+    subject: str
+
+
+class GitHistory(BaseModel):
+    commits: list[GitCommit]
+    head: str | None = None
