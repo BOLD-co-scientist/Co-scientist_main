@@ -19,7 +19,7 @@ RUN npm install -g @anthropic-ai/claude-code
 WORKDIR /app
 
 COPY pyproject.toml /app/pyproject.toml
-RUN pip install -e ".[science]"
+RUN pip install -e ".[science,dev]"
 
 # Source is bind-mounted at runtime; this COPY only seeds the image so it builds.
 COPY . /app
