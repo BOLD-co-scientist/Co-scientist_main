@@ -1,8 +1,16 @@
 """Research-agent supervisor entry point.
 
-Run as a long-lived task per session. Drains the supervisor's bus inbox between
-turns to receive human directives mid-session, dispatches subagents via the
-SDK Task tool, emits reports back via bus to `to="human"`.
+Runs as a fresh subprocess per *turn*. A turn is one human message plus all the
+agentic work the supervisor does in response (dispatching subagents via the SDK
+Task tool, reporting back via bus to ``to="human"``), bounded by the existing
+checkpoint/interrupt HITL machinery. When the turn finishes the process emits
+``session.idle`` and exits.
+
+Conversation continuity across turns is provided by the SDK: each run's CLI
+session UUID is captured from the ``ResultMessage`` and persisted via
+``settings.write_sdk_session``; the next turn passes it back as ``resume=`` so
+the supervisor sees the full prior conversation. See
+``docs/plans/R10-resumable-conversations.md``.
 """
 
 from __future__ import annotations
@@ -18,11 +26,13 @@ from claude_agent_sdk import (
     ClaudeAgentOptions,
     ClaudeSDKClient,
     ResultMessage,
+    SystemMessage,
     TextBlock,
     ToolUseBlock,
 )
 from claude_agent_sdk.types import HookMatcher
 from scaffold import bus, config_loader, eventlog, hitl, settings, spawn, tools_registry
+from scaffold._atomic import read_json
 
 
 SUPERVISOR_AGENT_ID = "supervisor"
@@ -68,7 +78,7 @@ def _library_listing_block() -> str:
 
 
 def _build_options(
-    session_id: str, task_text: str, event_state: dict
+    session_id: str, task_text: str, event_state: dict, resume_uuid: str | None = None
 ) -> ClaudeAgentOptions:
     sup = config_loader.load_supervisor()
     subs = config_loader.list_subagent_roles()
@@ -152,6 +162,9 @@ def _build_options(
         permission_mode="acceptEdits",
         cwd=str(settings.ROOT),
         hooks=hooks,
+        # When resuming, the SDK replays the prior conversation transcript so
+        # the supervisor keeps full context across turns/subprocess restarts.
+        resume=resume_uuid,
     )
 
 
@@ -179,6 +192,17 @@ async def _process_message_stream(client, session_id: str, event_state: dict):
     result = None
 
     async for message in client.receive_response():
+        # Capture the SDK/CLI conversation UUID so the next turn can resume.
+        # It rides on every ResultMessage; the init SystemMessage carries it
+        # too, as a fallback for turns that error before a result.
+        sid = getattr(message, "session_id", None)
+        if sid:
+            event_state["sdk_session_id"] = sid
+        elif isinstance(message, SystemMessage):
+            sid = (message.data or {}).get("session_id")
+            if sid:
+                event_state["sdk_session_id"] = sid
+
         if isinstance(message, AssistantMessage):
             for block in message.content:
                 if isinstance(block, TextBlock) and block.text.strip():
@@ -210,162 +234,204 @@ async def _process_message_stream(client, session_id: str, event_state: dict):
     return result
 
 
-async def run_session(session_id: str, task_text: str) -> bool:
-    """Run the research agent.
+async def run_session(
+    session_id: str, message: str, resume_uuid: str | None = None
+) -> None:
+    """Run one conversation turn of the research agent.
 
-    Returns ``True`` when research finishes normally (the evolution loop
-    should follow).  Returns ``False`` when the human interrupted and
-    chose *not* to continue — the caller should skip the evolution loop
-    and end the session.
+    A *turn* is one human ``message`` plus all the agentic work the supervisor
+    does in response, bounded by checkpoint/interrupt HITL. The first turn of a
+    session passes ``resume_uuid=None``; every follow-up passes the SDK
+    conversation UUID persisted by the previous turn so the supervisor keeps
+    full context.
 
-    Stops are signalled cross-process via ``hitl.request_stop`` (a flag
-    file) rather than an in-memory event, so this can run as a subprocess.
+    Stops are signalled cross-process via ``hitl.request_stop`` (a flag file)
+    rather than an in-memory event, so this can run as a subprocess.
     """
     settings.ensure_session_dirs(session_id)
-    eventlog.append(session_id, actor="system", kind="session.start", task=task_text)
-    eventlog.append(session_id, actor="system", kind="evolution_live_check", marker="v3")
+    is_first = resume_uuid is None
+    if is_first:
+        eventlog.append(session_id, actor="system", kind="session.start", task=message)
+        eventlog.append(
+            session_id, actor="system", kind="evolution_live_check", marker="v3"
+        )
+    else:
+        eventlog.append(
+            session_id, actor="human", kind="human_directive", text=message
+        )
+        eventlog.append(
+            session_id, actor="system", kind="turn.start", resumed=True
+        )
+
+    prior = read_json(settings.sdk_session_file(session_id), default={})
+    prior_turns = prior.get("turns", 0) if isinstance(prior, dict) else 0
 
     event_state = {
         "event_count": 0,
         "last_checkpoint_count": 0,
     }
+    if resume_uuid:
+        # Fallback so a turn that errors before its first ResultMessage still
+        # leaves a resumable UUID behind.
+        event_state["sdk_session_id"] = resume_uuid
 
-    options = _build_options(session_id, task_text, event_state)
+    options = _build_options(session_id, message, event_state, resume_uuid)
 
-    library_block = _library_listing_block()
-    first_turn = (library_block + task_text) if library_block else task_text
+    first_turn = message
+    if is_first:
+        library_block = _library_listing_block()
+        if library_block:
+            first_turn = library_block + message
 
-    async with ClaudeSDKClient(options=options) as client:
-        await client.query(first_turn)
+    try:
+        async with ClaudeSDKClient(options=options) as client:
+            await client.query(first_turn)
+            await _turn_loop(client, session_id, event_state)
+    finally:
+        sdk_id = event_state.get("sdk_session_id")
+        if sdk_id:
+            settings.write_sdk_session(session_id, sdk_id, prior_turns + 1)
 
-        while True:
-            result = await _process_message_stream(client, session_id, event_state)
-            if result is None:
-                break
 
-            deferred = getattr(result, "deferred_tool_use", None)
-            if deferred is None:
-                break
+async def _turn_loop(client, session_id: str, event_state: dict) -> None:
+    """Drive the supervisor through one turn, pausing at checkpoints/interrupts.
 
-            # ── Interrupt (Stop button) ─────────────────────────
-            if event_state.pop("interrupted", False):
-                event_state["deferring"] = False
-                eventlog.append(session_id, actor="system", kind="session.interrupted")
-
-                answer = await hitl.ask(
-                    session_id,
-                    kind="interrupt_feedback",
-                    summary=(
-                        "Session interrupted. Enter new instructions and"
-                        " approve, or reject to end the session."
-                    ),
-                    payload={},
-                )
-
-                decision = answer.get("decision", "reject")
-                new_instructions = (answer.get("note") or "").strip()
-
-                if decision in ("reject", "interrupted"):
-                    eventlog.append(
-                        session_id,
-                        actor="system",
-                        kind="research.complete",
-                        reason="stopped",
-                    )
-                    return False
-
-                if new_instructions:
-                    eventlog.append(
-                        session_id,
-                        actor="human",
-                        kind="human_directive",
-                        text=new_instructions,
-                    )
-                    await client.query(
-                        f"[Human interrupted with new instructions]\n{new_instructions}"
-                    )
-                else:
-                    await client.query("[Resuming after pause]")
-                continue
-
-            # ── Checkpoint ──────────────────────────────────────
-            count = event_state["event_count"]
-            trace = event_state.pop("_trace", [])
+    Returns when the turn is done (natural finish, checkpoint/interrupt that
+    ends the turn). Conversation context is preserved by the SDK transcript, so
+    "ending a turn" never loses history — the human can always send another
+    message to resume.
+    """
+    while True:
+        result = await _process_message_stream(client, session_id, event_state)
+        if result is None:
             eventlog.append(
-                session_id,
-                actor=SUPERVISOR_AGENT_ID,
-                kind="checkpoint.triggered",
-                event_count=count,
-                deferred_tool=deferred.name,
-                hook_trace=trace,
+                session_id, actor="system", kind="research.complete", reason="finished"
             )
+            return
 
-            await client.query(
-                "[Checkpoint] Summarize progress by role, then state next steps."
-                " Do NOT call any tools — just reply with text.\n"
-                "Format:\n"
-                "**Supervisor:** what you have done directly (planning, synthesis, communications).\n"
-                "**Subagents:** for each subagent launched, list its role, task, status, and key output.\n"
-                "**Next steps:** what you plan to do or delegate next."
+        deferred = getattr(result, "deferred_tool_use", None)
+        if deferred is None:
+            eventlog.append(
+                session_id, actor="system", kind="research.complete", reason="finished"
             )
-            summary_result = await _process_message_stream(
-                client, session_id, event_state
-            )
-            summary_text = event_state.pop("last_report_text", "")
+            return
+
+        # ── Interrupt (Stop button) ─────────────────────────
+        if event_state.pop("interrupted", False):
+            event_state["deferring"] = False
+            eventlog.append(session_id, actor="system", kind="session.interrupted")
 
             answer = await hitl.ask(
                 session_id,
-                kind="checkpoint",
-                summary=f"Checkpoint ({count} events).",
-                payload={
-                    "event_count": count,
-                    "agent_summary": summary_text,
-                    "deferred_tool": deferred.name,
-                    "deferred_input": _short_input(deferred.input),
-                },
+                kind="interrupt_feedback",
+                summary=(
+                    "Session interrupted. Enter new instructions and"
+                    " approve, or reject to end the turn."
+                ),
+                payload={},
             )
-
-            event_state["last_checkpoint_count"] = count
-            event_state["deferring"] = False
 
             decision = answer.get("decision", "reject")
-            note = answer.get("note") or ""
-            eventlog.append(
-                session_id,
-                actor="human",
-                kind="checkpoint.resolved",
-                decision=decision,
-                note=note,
-            )
+            new_instructions = (answer.get("note") or "").strip()
 
-            if decision == "reject":
-                if note:
-                    await client.query(f"[Session terminated by human] {note}")
-                else:
-                    eventlog.append(
-                        session_id,
-                        actor="system",
-                        kind="research.complete",
-                        reason="checkpoint_rejected",
-                    )
-                    return True
-
-            if decision == "interrupted":
+            if decision in ("reject", "interrupted"):
                 eventlog.append(
                     session_id,
                     actor="system",
                     kind="research.complete",
                     reason="stopped",
                 )
-                return False
+                return
 
-            resume_msg = "[Checkpoint approved] Continue working."
+            if new_instructions:
+                eventlog.append(
+                    session_id,
+                    actor="human",
+                    kind="human_directive",
+                    text=new_instructions,
+                )
+                await client.query(
+                    f"[Human interrupted with new instructions]\n{new_instructions}"
+                )
+            else:
+                await client.query("[Resuming after pause]")
+            continue
+
+        # ── Checkpoint ──────────────────────────────────────
+        count = event_state["event_count"]
+        trace = event_state.pop("_trace", [])
+        eventlog.append(
+            session_id,
+            actor=SUPERVISOR_AGENT_ID,
+            kind="checkpoint.triggered",
+            event_count=count,
+            deferred_tool=deferred.name,
+            hook_trace=trace,
+        )
+
+        await client.query(
+            "[Checkpoint] Summarize progress by role, then state next steps."
+            " Do NOT call any tools — just reply with text.\n"
+            "Format:\n"
+            "**Supervisor:** what you have done directly (planning, synthesis, communications).\n"
+            "**Subagents:** for each subagent launched, list its role, task, status, and key output.\n"
+            "**Next steps:** what you plan to do or delegate next."
+        )
+        summary_result = await _process_message_stream(
+            client, session_id, event_state
+        )
+        summary_text = event_state.pop("last_report_text", "")
+
+        answer = await hitl.ask(
+            session_id,
+            kind="checkpoint",
+            summary=f"Checkpoint ({count} events).",
+            payload={
+                "event_count": count,
+                "agent_summary": summary_text,
+                "deferred_tool": deferred.name,
+                "deferred_input": _short_input(deferred.input),
+            },
+        )
+
+        event_state["last_checkpoint_count"] = count
+        event_state["deferring"] = False
+
+        decision = answer.get("decision", "reject")
+        note = answer.get("note") or ""
+        eventlog.append(
+            session_id,
+            actor="human",
+            kind="checkpoint.resolved",
+            decision=decision,
+            note=note,
+        )
+
+        if decision == "reject":
             if note:
-                resume_msg = f"[Checkpoint approved] [Human feedback] {note}"
-            await client.query(resume_msg)
+                await client.query(f"[Session terminated by human] {note}")
+            else:
+                eventlog.append(
+                    session_id,
+                    actor="system",
+                    kind="research.complete",
+                    reason="checkpoint_rejected",
+                )
+                return
 
-    eventlog.append(session_id, actor="system", kind="research.complete")
-    return True
+        if decision == "interrupted":
+            eventlog.append(
+                session_id,
+                actor="system",
+                kind="research.complete",
+                reason="stopped",
+            )
+            return
+
+        resume_msg = "[Checkpoint approved] Continue working."
+        if note:
+            resume_msg = f"[Checkpoint approved] [Human feedback] {note}"
+        await client.query(resume_msg)
 
 
 def _short_input(payload: Any) -> str:
@@ -376,75 +442,43 @@ def _short_input(payload: Any) -> str:
     return s
 
 
-async def follow_session(session_id: str, task_text: str) -> None:
-    """Run research, then enter an evolution loop.
+async def run_turn(
+    session_id: str, message: str, resume_uuid: str | None = None
+) -> None:
+    """Run one conversation turn as a subprocess, then leave the session idle
+    and resumable.
 
-    A stop is requested via ``hitl.request_stop(session_id)`` (a flag file).
-    The PreToolUse hook inside ``run_session`` checks it and defers the next
-    tool call, so the human can redirect research without losing context.
+    Crashes are logged but never crash the session — ``run_session`` persists
+    the SDK conversation UUID in a ``finally`` regardless, so the human can send
+    another message to resume. A ``session.idle`` event is always emitted last
+    so the API/UI know the turn is over and a follow-up is welcome.
     """
     try:
-        await _follow_session_inner(session_id, task_text)
+        await run_session(session_id, message, resume_uuid)
     except asyncio.CancelledError:
         eventlog.append(
             session_id, actor="system", kind="session.end", reason="cancelled"
         )
         raise
-
-
-async def _follow_session_inner(session_id: str, task_text: str) -> None:
-    try:
-        completed = await run_session(session_id, task_text)
     except Exception as e:
         eventlog.append(
             session_id, actor="system", kind="research.crashed", error=str(e)
         )
-        completed = True
-
-    if not completed:
-        eventlog.append(
-            session_id, actor="system", kind="session.end", reason="stopped"
-        )
-        return
-
-    while True:
-        answer = await hitl.ask(
-            session_id,
-            kind="evolution_prompt",
-            summary=(
-                "Research phase finished. Enter an evolution command and"
-                " approve, or reject to end the session."
-            ),
-            payload={},
-        )
-
-        decision = answer.get("decision", "reject")
-        command = (answer.get("note") or "").strip()
-
-        if decision in ("reject", "interrupted") or not command:
-            break
-
-        from evolution.runtime import run_command
-
-        eventlog.append(
-            session_id, actor="human", kind="evolution.requested", command=command
-        )
-        try:
-            await run_command(session_id, command)
-        except Exception as e:
-            eventlog.append(
-                session_id, actor="system", kind="evolution.crashed", error=str(e)
-            )
-
-    eventlog.append(session_id, actor="system", kind="session.end")
+    finally:
+        eventlog.append(session_id, actor="system", kind="session.idle")
 
 
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--session", required=True)
-    p.add_argument("--task", required=True)
+    p.add_argument("--task", required=True, help="The human message for this turn.")
+    p.add_argument(
+        "--resume",
+        default=None,
+        help="SDK conversation UUID to resume; omit for a session's first turn.",
+    )
     args = p.parse_args()
-    asyncio.run(follow_session(args.session, args.task))
+    asyncio.run(run_turn(args.session, args.task, args.resume))
 
 
 if __name__ == "__main__":
