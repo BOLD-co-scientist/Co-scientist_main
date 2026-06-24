@@ -91,6 +91,12 @@ class LibraryHealth(BaseModel):
     broken_symlinks: list[dict[str, str]]
 
 
+class SessionFile(BaseModel):
+    path: str  # relative to the session dir, e.g. "results/summary.md"
+    size: int
+    mtime: float
+
+
 class GitCommit(BaseModel):
     sha: str
     parents: list[str]

@@ -17,7 +17,7 @@ import uuid
 
 import yaml
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from scaffold import sandbox, settings
 from scaffold._atomic import append_jsonl, read_json, write_json
 
@@ -413,6 +413,64 @@ def session_events(sid: str, limit: int = 100, ctx: UserContext = Depends(_ctx))
     if limit < 1 or limit > 1000:
         raise HTTPException(400, "limit must be between 1 and 1000")
     return _tail_events(ctx, sid)[-limit:]
+
+
+# Subdirs of a session that hold agent-generated, user-facing output.
+_SESSION_OUTPUT_DIRS = ("results", "scratch")
+
+
+def _resolve_session_file(ctx: UserContext, sid: str, relpath: str) -> Path:
+    """Resolve ``relpath`` to a real file inside the session's output dirs,
+    rejecting anything that escapes them (path traversal)."""
+    base = ctx.session_dir(sid)
+    target = (base / relpath).resolve()
+    roots = [(base / d).resolve() for d in _SESSION_OUTPUT_DIRS]
+    for root in roots:
+        if target == root or root in target.parents:
+            return target
+    raise HTTPException(400, "path is outside the session's output directories")
+
+
+@app.get("/sessions/{sid}/files", response_model=list[schemas.SessionFile])
+def list_session_files(sid: str, ctx: UserContext = Depends(_ctx)):
+    """List files the agent generated for this session (results/ and scratch/),
+    newest first, so the UI can show and download them."""
+    sid = _safe_sid(sid)
+    if not _session_exists(ctx, sid):
+        raise HTTPException(404, "unknown session")
+    base = ctx.session_dir(sid)
+    out: list[schemas.SessionFile] = []
+    for sub in _SESSION_OUTPUT_DIRS:
+        d = base / sub
+        if not d.exists():
+            continue
+        for p in d.rglob("*"):
+            if not p.is_file():
+                continue
+            try:
+                stat = p.stat()
+            except OSError:
+                continue
+            out.append(
+                schemas.SessionFile(
+                    path=str(p.relative_to(base)), size=stat.st_size, mtime=stat.st_mtime
+                )
+            )
+    out.sort(key=lambda f: f.mtime, reverse=True)
+    return out
+
+
+@app.get("/sessions/{sid}/files/download")
+def download_session_file(sid: str, path: str, ctx: UserContext = Depends(_ctx)):
+    """Download one generated file from this session by its relative path
+    (e.g. ``results/summary.md``). Tenant-scoped + traversal-guarded."""
+    sid = _safe_sid(sid)
+    if not _session_exists(ctx, sid):
+        raise HTTPException(404, "unknown session")
+    target = _resolve_session_file(ctx, sid, path)
+    if not target.exists() or not target.is_file():
+        raise HTTPException(404, f"no such file: {path}")
+    return FileResponse(target, filename=target.name)
 
 
 @app.delete("/sessions/{sid}")

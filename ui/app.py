@@ -87,6 +87,20 @@ def api_request(method: str, path: str, **kwargs) -> requests.Response:
     return resp
 
 
+@st.cache_data(show_spinner=False)
+def _fetch_session_file(api_key: str, sid: str, path: str, mtime: float) -> bytes:
+    """Fetch one generated file's bytes. Cached on (sid, path, mtime) so the
+    2s autorefresh doesn't re-download unchanged files."""
+    r = requests.get(
+        f"{API_URL}/sessions/{sid}/files/download",
+        params={"path": path},
+        headers={"Authorization": f"Bearer {api_key}"},
+        timeout=60,
+    )
+    r.raise_for_status()
+    return r.content
+
+
 def check_login() -> bool:
     if "api_key" in st.session_state and "user" in st.session_state:
         return True
@@ -499,6 +513,50 @@ if check_login():
                     except requests.exceptions.RequestException:
                         st.error("Failed to stop session.")
                     st.rerun()
+
+        # Generated files — the agent's outputs (results/ and scratch/), now
+        # downloadable directly from the UI instead of only from the backend.
+        try:
+            files_resp = api_request(
+                "GET", f"/sessions/{st.session_state.session_id}/files", timeout=10
+            )
+            gen_files = files_resp.json() if files_resp.status_code == 200 else []
+        except requests.exceptions.RequestException:
+            gen_files = []
+
+        with st.expander(f"📁 Generated files ({len(gen_files)})", expanded=bool(gen_files)):
+            if not gen_files:
+                st.caption("No files yet — the agent writes outputs to results/ and scratch/.")
+            else:
+                for gf in gen_files:
+                    c1, c2, c3 = st.columns([0.62, 0.18, 0.20], vertical_alignment="center")
+                    size_kb = gf["size"] / 1024
+                    size_str = (
+                        f"{size_kb / 1024:.1f} MB"
+                        if size_kb >= 1024
+                        else f"{size_kb:.1f} KB" if size_kb >= 1 else f"{gf['size']} B"
+                    )
+                    c1.markdown(f"`{gf['path']}`")
+                    c2.caption(size_str)
+                    if gf["size"] <= 25 * 1024 * 1024:
+                        try:
+                            data = _fetch_session_file(
+                                st.session_state.api_key,
+                                st.session_state.session_id,
+                                gf["path"],
+                                gf["mtime"],
+                            )
+                            c3.download_button(
+                                "Download",
+                                data=data,
+                                file_name=gf["path"].split("/")[-1],
+                                key=f"dl_{gf['path']}",
+                                use_container_width=True,
+                            )
+                        except Exception:
+                            c3.caption("unavailable")
+                    else:
+                        c3.caption("too large")
 
         if events:
             last100 = events[-100:]
