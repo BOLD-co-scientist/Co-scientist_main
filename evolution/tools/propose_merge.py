@@ -22,7 +22,7 @@ def _is_strict(diff: str) -> bool:
 
 async def _run_smoke(wt: sandbox.Worktree) -> tuple[bool, str]:
     proc = await asyncio.create_subprocess_shell(
-        "pytest -q tests/test_smoke_v0.py",
+        "python -m pytest -q tests/test_smoke_v0.py",
         cwd=str(wt.path),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,

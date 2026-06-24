@@ -48,6 +48,7 @@ R1, R5, R2 are being implemented in **parallel worktrees**. See [docs/plans/PARA
 
 | Date | Feature | Commit |
 |---|---|---|
+| 2026-06-23 | **R10** — resumable multi-turn conversations (SDK `resume` + per-turn subprocess; back-and-forth like Claude Code) | _(feat/R10-resume)_ |
 | 2026-04-26 | v0 backend bootstrap (scaffold, research/evolution runtimes, tools, FastAPI, sandbox) | `d6053a7` |
 | 2026-04-26 | CLAUDE.md project guide | `bf44c45` |
 | 2026-04-26 | Roadmap + plan-file convention | _(this commit)_ |

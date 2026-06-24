@@ -43,7 +43,42 @@ def _runtime_env() -> dict[str, str]:
     existing = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = root + (os.pathsep + existing if existing else "")
     env["COSCIENTIST_ROOT"] = root
+    # Keep the SDK transcript dir on the persistent ./state mount so a later
+    # turn can resume the conversation even across a container restart.
+    env["CLAUDE_CONFIG_DIR"] = str(settings.CLAUDE_CONFIG_DIR)
     return env
+
+
+async def _spawn_research(sid: str, message: str, resume_uuid: str | None = None) -> None:
+    """Spawn the research runtime as a fresh subprocess for one turn.
+
+    Used both for a session's first turn (``resume_uuid=None``) and for every
+    follow-up turn (``resume_uuid`` = the SDK conversation UUID persisted by the
+    previous turn). A fresh subprocess per turn is deliberate: it keeps the
+    self-modification invariant (an approved evolution merge is picked up by the
+    next turn without restarting this server).
+    """
+    log_fh = open(settings.session_dir(sid) / "runtime.log", "ab")
+    argv = [
+        sys.executable,
+        "-m",
+        "research.runtime",
+        "--session",
+        sid,
+        "--task",
+        message,
+    ]
+    if resume_uuid:
+        argv += ["--resume", resume_uuid]
+    proc = await asyncio.create_subprocess_exec(
+        *argv,
+        cwd=str(settings.ROOT),
+        env=_runtime_env(),
+        stdout=log_fh,
+        stderr=log_fh,
+    )
+    _RUNNING[sid] = proc
+    asyncio.create_task(_monitor_runtime(sid, proc, log_fh))
 
 
 async def _monitor_runtime(sid: str, proc: "asyncio.subprocess.Process", log_fh) -> None:
@@ -87,24 +122,8 @@ async def start_research(req: schemas.StartResearchRequest):
     # Clear any stale stop flag left over from a prior run reusing this sid.
     hitl.clear_stop(sid)
 
-    # Spawn the research runtime as a fresh subprocess. stdout+stderr are
-    # captured to runtime.log so a crash is diagnosable after the fact.
-    log_fh = open(settings.session_dir(sid) / "runtime.log", "ab")
-    proc = await asyncio.create_subprocess_exec(
-        sys.executable,
-        "-m",
-        "research.runtime",
-        "--session",
-        sid,
-        "--task",
-        req.task,
-        cwd=str(settings.ROOT),
-        env=_runtime_env(),
-        stdout=log_fh,
-        stderr=log_fh,
-    )
-    _RUNNING[sid] = proc
-    asyncio.create_task(_monitor_runtime(sid, proc, log_fh))
+    # Spawn the first turn. stdout+stderr land in runtime.log for diagnosis.
+    await _spawn_research(sid, req.task)
     return schemas.StartResearchResponse(session_id=sid, task=req.task)
 
 
@@ -120,17 +139,31 @@ async def stop_session(sid: str):
 
 
 @app.post("/research/sessions/{sid}/messages")
-def post_human_directive(sid: str, body: schemas.HumanDirective):
+async def post_human_directive(sid: str, body: schemas.HumanDirective):
+    """Send a follow-up message to an existing session — the multi-turn path.
+
+    Spawns a fresh runtime turn that resumes the prior conversation via the
+    persisted SDK UUID, so the supervisor keeps full context. Returns 409 if a
+    turn is still running (the human should Stop it or wait); 404 if the session
+    is unknown; 409 if there is no prior turn to resume yet.
+    """
     if not settings.session_dir(sid).exists():
         raise HTTPException(404, "unknown session")
-    msg_id = bus.send(
-        sid,
-        sender="human",
-        target="supervisor",
-        kind="human_directive",
-        payload={"text": body.text},
-    )
-    return {"ok": True, "msg_id": msg_id}
+    if sid in _RUNNING:
+        raise HTTPException(409, "session is busy; stop the current turn or wait")
+
+    resume_uuid = settings.read_sdk_session(sid)
+    if not resume_uuid:
+        raise HTTPException(
+            409,
+            "no resumable conversation yet — the first turn has not produced a"
+            " session id (still starting, or it crashed before its first reply)",
+        )
+
+    hitl.clear_stop(sid)
+    eventlog.append(sid, actor="human", kind="message.received", text=body.text)
+    await _spawn_research(sid, body.text, resume_uuid)
+    return {"ok": True, "session_id": sid, "resumed": True}
 
 
 # ---------- library ----------

@@ -381,8 +381,11 @@ if st.session_state.session_id is None:
 else:
     events_file = STATE_DIR / st.session_state.session_id / "events.jsonl"
 
-    # Quick pre-read to check if the session is dead (Red status)
+    # Pre-read the last event to classify session state.
+    #   is_idle — a turn finished; the session is resumable (send a follow-up).
+    #   is_dead — hard stop/crash with no resumable state.
     is_dead = False
+    is_idle = False
     if events_file.exists():
         try:
             with open(events_file, "r") as f:
@@ -390,7 +393,10 @@ else:
                 lines = [line.strip() for line in f if line.strip()]
                 if lines:
                     last_event = json.loads(lines[-1])
-                    if last_event.get("kind") in [
+                    last_kind = last_event.get("kind")
+                    if last_kind == "session.idle":
+                        is_idle = True
+                    elif last_kind in [
                         "session.ended",
                         "session.end",
                         "session.error",
@@ -405,6 +411,9 @@ else:
     if is_dead:
         status_color = "#dc3545"  # Red
         status_text = "Session Ended"
+    elif is_idle:
+        status_color = "#0d6efd"  # Blue
+        status_text = "Idle — send a message"
     elif is_awaiting_human:
         status_color = "#28a745"  # Green
         status_text = "Awaiting Human Input"
@@ -551,14 +560,44 @@ else:
         st.info("Waiting for agent to initialize and log events...")
 
     # --- MAIN UI: Input ---
-    # Chat input is disabled for active sessions — all human interaction
-    # goes through the HITL panel in the sidebar (checkpoints, interrupts,
-    # evolution prompts).
-    placeholder = "Session ended." if is_dead else "Use the HITL panel in the sidebar to interact."
-    st.chat_input(placeholder, disabled=True)
+    # When the session is idle (a turn finished), the chat input is live: a
+    # message resumes the conversation with full prior context. While a turn is
+    # actively running, mid-flight redirection goes through the HITL panel
+    # (Stop -> checkpoint/interrupt) instead.
+    if is_idle:
+        if follow_up := st.chat_input("Reply to continue the conversation…"):
+            with st.spinner("Resuming…"):
+                try:
+                    resp = requests.post(
+                        f"{API_URL}/research/sessions/{st.session_state.session_id}/messages",
+                        json={"text": follow_up},
+                        timeout=10,
+                    )
+                    if resp.status_code == 409:
+                        st.warning(
+                            "Session is still working — Stop the current turn or wait."
+                        )
+                    elif resp.status_code >= 400:
+                        st.error(f"Could not send message: {resp.text}")
+                    else:
+                        st.rerun()
+                except requests.exceptions.RequestException as e:
+                    st.error(f"Could not send message: {e}")
+    else:
+        placeholder = (
+            "Session ended."
+            if is_dead
+            else "Working… use the HITL panel in the sidebar to interact."
+        )
+        st.chat_input(placeholder, disabled=True)
 
     # Auto-refresh to pull new events (non-blocking via JavaScript timer).
-    # Skip when: session ended, HITL pending (user is interacting), or
-    # delete dialog is open.
-    if not is_dead and not is_awaiting_human and not st.session_state.pending_delete_sid:
+    # Skip when: session ended, idle (nothing changing), HITL pending (user is
+    # interacting), or delete dialog is open.
+    if (
+        not is_dead
+        and not is_idle
+        and not is_awaiting_human
+        and not st.session_state.pending_delete_sid
+    ):
         st_autorefresh(interval=2000, key=f"refresh_{st.session_state.session_id}")
