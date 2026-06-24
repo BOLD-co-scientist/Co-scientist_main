@@ -5,6 +5,7 @@ Usage:
   coscientist research --task "..."
   coscientist evolve   --command "..."
   coscientist api
+  coscientist users create <display_name>
   coscientist status   <session_id>
   coscientist reset    --to-v0
 """
@@ -83,6 +84,73 @@ def cmd_reset(args):
         sys.exit(1)
 
 
+def cmd_users_create(args):
+    from api import auth
+    from api.tenancy import ensure_user_root
+
+    user, api_key = auth.create_user(args.display_name)
+    root = ensure_user_root(user.user_id)
+    print(f"user_id: {user.user_id}")
+    print(f"display_name: {user.display_name}")
+    print(f"root: {root}")
+    print("")
+    print("API key (shown once):")
+    print(api_key)
+
+
+def cmd_users_list(args):
+    from api import auth
+    from api.tenancy import user_root
+
+    users = auth.list_users(include_disabled=True)
+    if not users:
+        print("no users")
+        return
+    for user in users:
+        status = "disabled" if user.disabled else "active"
+        print(f"{user.user_id}\t{status}\t{user.display_name}\t{user_root(user.user_id)}")
+
+
+def cmd_users_disable(args):
+    from api import auth
+
+    if not auth.set_disabled(args.user_id, True):
+        print(f"no such user {args.user_id}", file=sys.stderr)
+        sys.exit(1)
+    print(f"disabled {args.user_id}")
+
+
+def cmd_users_enable(args):
+    from api import auth
+
+    if not auth.set_disabled(args.user_id, False):
+        print(f"no such user {args.user_id}", file=sys.stderr)
+        sys.exit(1)
+    print(f"enabled {args.user_id}")
+
+
+def cmd_users_delete(args):
+    from api import auth
+    from api.tenancy import user_base_dir
+
+    if not args.yes:
+        print(
+            "Refusing to delete without --yes. This removes the auth row and all "
+            f"state under {user_base_dir(args.user_id)}.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    base = user_base_dir(args.user_id)
+    if not auth.delete_user(args.user_id):
+        print(f"no such user {args.user_id}", file=sys.stderr)
+        sys.exit(1)
+
+    if base.exists():
+        shutil.rmtree(base)
+    print(f"deleted {args.user_id}")
+
+
 def _new_sid() -> str:
     import uuid
 
@@ -113,6 +181,36 @@ def main():
     pre = sub.add_parser("reset", help="reset code to a tag while preserving state/")
     pre.add_argument("--to-v0", action="store_true")
     pre.set_defaults(func=cmd_reset)
+
+    users = sub.add_parser("users", help="manage API-key users")
+    users_sub = users.add_subparsers(dest="users_cmd", required=True)
+
+    ucreate = users_sub.add_parser("create", help="create a user and print a one-time API key")
+    ucreate.add_argument("display_name")
+    ucreate.set_defaults(func=cmd_users_create)
+
+    ulist = users_sub.add_parser("list", help="list users")
+    ulist.set_defaults(func=cmd_users_list)
+
+    udisable = users_sub.add_parser("disable", help="disable a user API key")
+    udisable.add_argument("user_id")
+    udisable.set_defaults(func=cmd_users_disable)
+
+    uenable = users_sub.add_parser("enable", help="re-enable a disabled user")
+    uenable.add_argument("user_id")
+    uenable.set_defaults(func=cmd_users_enable)
+
+    udelete = users_sub.add_parser(
+        "delete",
+        help="delete a user, their API key DB row, and all per-user state",
+    )
+    udelete.add_argument("user_id")
+    udelete.add_argument(
+        "--yes",
+        action="store_true",
+        help="confirm destructive deletion of the user and all state",
+    )
+    udelete.set_defaults(func=cmd_users_delete)
 
     args = p.parse_args()
     args.func(args)
