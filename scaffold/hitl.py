@@ -94,6 +94,81 @@ def reject_all_pending(session_id: str) -> None:
         )
 
 
+def _chat_dir(session_id: str) -> Path:
+    return settings.session_dir(session_id) / "control" / "chat"
+
+
+def queue_chat(session_id: str, text: str) -> str:
+    """Queue a free-form human message for a turn that is currently blocked on a
+    HITL prompt. Consumed by ``drain_chat`` inside the runtime's wait loops, so
+    the human can talk to the agent *before* deciding approve/deny."""
+    d = _chat_dir(session_id)
+    d.mkdir(parents=True, exist_ok=True)
+    # Filename is time-ordered so ``drain_chat`` returns messages in send order.
+    cid = f"{time.time():.6f}-{uuid.uuid4().hex[:8]}"
+    write_json(d / f"{cid}.json", {
+        "id": cid,
+        "text": text,
+        "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    })
+    return cid
+
+
+def drain_chat(session_id: str) -> list[dict]:
+    """Return and remove all queued chat messages, in send order."""
+    d = _chat_dir(session_id)
+    if not d.exists():
+        return []
+    out: list[dict] = []
+    for f in sorted(d.glob("*.json")):
+        rec = read_json(f)
+        if rec:
+            out.append(rec)
+        f.unlink(missing_ok=True)
+    return out
+
+
+def open_request(session_id: str, kind: str, summary: str, payload: Any) -> str:
+    """Write a pending HITL request and return its id, without blocking.
+
+    Pair with ``poll_answer`` (and optionally ``drain_chat``) to build an
+    interactive wait that lets the human chat with the agent before deciding."""
+    rid = uuid.uuid4().hex[:12]
+    rec = {
+        "id": rid,
+        "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "kind": kind,
+        "summary": summary,
+        "payload": payload,
+        "decision": None,
+    }
+    write_json(_pending(session_id) / f"{rid}.json", rec)
+    eventlog.append(session_id, actor="system", kind="hitl.pending", ref=rid, summary=summary)
+    return rid
+
+
+def poll_answer(session_id: str, request_id: str) -> dict | None:
+    """Return the answered record for ``request_id`` if the human has decided,
+    else None. Non-blocking."""
+    answered_path = _answered(session_id) / f"{request_id}.json"
+    if answered_path.exists():
+        return read_json(answered_path)
+    return None
+
+
+def resolve_request(session_id: str, request_id: str, decision: str, note: str = "") -> None:
+    """Resolve an open request programmatically (e.g. on stop/interrupt) so any
+    poller and the UI both see it as decided."""
+    pending_path = _pending(session_id) / f"{request_id}.json"
+    rec = read_json(pending_path) if pending_path.exists() else {"id": request_id}
+    rec["decision"] = decision
+    rec["note"] = note
+    rec["decided_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    write_json(_answered(session_id) / f"{request_id}.json", rec)
+    pending_path.unlink(missing_ok=True)
+    eventlog.append(session_id, actor="system", kind="hitl.answer", ref=request_id, decision=decision)
+
+
 def answer(session_id: str, request_id: str, decision: str, note: str | None = None) -> None:
     """Decision in {'approve', 'reject', 'edit'}. 'edit' is reserved for future use."""
     pending = _pending(session_id) / f"{request_id}.json"
@@ -128,23 +203,28 @@ async def ask(
     the call blocks indefinitely until the human responds or the session is
     stopped.
     """
-    rid = uuid.uuid4().hex[:12]
-    rec = {
-        "id": rid,
-        "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "kind": kind,
-        "summary": summary,
-        "payload": payload,
-        "decision": None,
-    }
+    rid = open_request(session_id, kind, summary, payload)
     pending_path = _pending(session_id) / f"{rid}.json"
-    write_json(pending_path, rec)
-    eventlog.append(session_id, actor="system", kind="hitl.pending", ref=rid, summary=summary)
-
     answered_path = _answered(session_id) / f"{rid}.json"
     while True:
         if answered_path.exists():
             return read_json(answered_path)
+        # A free-form chat reply counts as the human's answer here: the agent is
+        # blocked inside this call (e.g. an open-ended ``ask``), so the only way
+        # to reach it is via the returned record. Deliver the text as the note.
+        msgs = drain_chat(session_id)
+        if msgs:
+            text = "\n".join(m.get("text", "") for m in msgs).strip()
+            rec = read_json(pending_path) if pending_path.exists() else {"id": rid}
+            rec["decision"] = "answer"
+            rec["note"] = text
+            rec["decided_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            write_json(answered_path, rec)
+            pending_path.unlink(missing_ok=True)
+            eventlog.append(
+                session_id, actor="human", kind="hitl.answer", ref=rid, decision="answer"
+            )
+            return rec
         if is_stop_requested(session_id):
             clear_stop(session_id)
             pending_path.unlink(missing_ok=True)

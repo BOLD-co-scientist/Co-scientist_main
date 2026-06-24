@@ -346,6 +346,29 @@ async def post_human_directive(
     return {"ok": True, "session_id": sid, "resumed": True}
 
 
+@app.post("/research/sessions/{sid}/interject")
+def interject(sid: str, body: schemas.HumanDirective, ctx: UserContext = Depends(_ctx)):
+    """Send a message to a turn that is currently blocked on a HITL prompt, so
+    the human can talk to the agent *before* deciding approve/deny.
+
+    Unlike ``/messages`` this does not require the session to be idle: it queues
+    the text into the session's chat channel for the running runtime's HITL wait
+    loop to pick up (see ``hitl.drain_chat``). 404 if the session is unknown."""
+    sid = _safe_sid(sid)
+    if not _session_exists(ctx, sid):
+        raise HTTPException(404, "unknown session")
+    chat_dir = ctx.session_dir(sid) / "control" / "chat"
+    chat_dir.mkdir(parents=True, exist_ok=True)
+    cid = f"{time.time():.6f}-{uuid.uuid4().hex[:8]}"
+    write_json(chat_dir / f"{cid}.json", {
+        "id": cid,
+        "text": body.text,
+        "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    })
+    _append_event(ctx, sid, actor="human", kind="message.received", text=body.text)
+    return {"ok": True, "queued": True}
+
+
 # ---------- sessions ----------
 
 

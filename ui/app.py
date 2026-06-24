@@ -578,20 +578,28 @@ if check_login():
         else:
             st.info("Waiting for agent to initialize and log events...")
 
-        # When the session is idle (a turn finished), the chat input is live: a
-        # message resumes the conversation with full prior context. While a turn
-        # is actively running, mid-flight redirection goes through the HITL panel
-        # (Stop -> checkpoint/interrupt) instead.
-        if is_idle:
-            if follow_up := st.chat_input("Reply to continue the conversation…"):
-                with st.spinner("Resuming…"):
+        # The chat input is live in two states:
+        #   idle  — a turn finished; a message resumes the conversation.
+        #   awaiting-human — a HITL prompt is pending; a message is sent to the
+        #     agent mid-turn (you can talk to it before deciding Approve/Deny in
+        #     the sidebar). For an open-ended question your message is the reply.
+        # While a turn is actively running (neither state), the box is disabled.
+        if is_idle or is_awaiting_human:
+            placeholder = (
+                "Reply to continue the conversation…"
+                if is_idle
+                else "Message the agent… (Approve/Deny in the sidebar to finalize)"
+            )
+            if msg := st.chat_input(placeholder):
+                if is_idle:
+                    endpoint = f"/research/sessions/{st.session_state.session_id}/messages"
+                    spinner = "Resuming…"
+                else:
+                    endpoint = f"/research/sessions/{st.session_state.session_id}/interject"
+                    spinner = "Sending…"
+                with st.spinner(spinner):
                     try:
-                        resp = api_request(
-                            "POST",
-                            f"/research/sessions/{st.session_state.session_id}/messages",
-                            json={"text": follow_up},
-                            timeout=10,
-                        )
+                        resp = api_request("POST", endpoint, json={"text": msg}, timeout=10)
                         if resp.status_code == 409:
                             st.warning(
                                 "Session is still working — Stop the current turn or wait."
@@ -610,13 +618,13 @@ if check_login():
             )
             st.chat_input(placeholder, disabled=True)
 
-        # Auto-refresh to pull new events. Skip when the session ended, is idle
-        # (nothing changing), HITL is pending (user is interacting), or the delete
-        # dialog is open.
+        # Auto-refresh to pull new events. Skip only when the session ended, is
+        # idle (nothing changes until you send), or the delete dialog is open.
+        # During an awaiting-human HITL we DO keep refreshing so the agent's
+        # replies to your chat messages appear.
         if (
             not is_dead
             and not is_idle
-            and not is_awaiting_human
             and not st.session_state.pending_delete_sid
         ):
             st_autorefresh(interval=2000, key=f"refresh_{st.session_state.session_id}")

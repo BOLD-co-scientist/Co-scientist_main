@@ -115,6 +115,12 @@ def _build_options(
                 f"SKIP:{tool_name}(agent={agent_id})"
             )
             return _ALLOW
+        # While the human is chatting with us during a checkpoint review, let
+        # tool calls through so the agent can answer — don't open a nested
+        # checkpoint mid-conversation.
+        if event_state.get("suspend_checkpoints"):
+            event_state.setdefault("_trace", []).append(f"CHAT_ALLOW:{tool_name}")
+            return _ALLOW
         if event_state.get("deferring"):
             event_state.setdefault("_trace", []).append(f"BATCH_DEFER:{tool_name}")
             return _DEFER
@@ -382,7 +388,7 @@ async def _turn_loop(client, session_id: str, event_state: dict) -> None:
         )
         summary_text = event_state.pop("last_report_text", "")
 
-        answer = await hitl.ask(
+        rid = hitl.open_request(
             session_id,
             kind="checkpoint",
             summary=f"Checkpoint ({count} events).",
@@ -393,9 +399,38 @@ async def _turn_loop(client, session_id: str, event_state: dict) -> None:
                 "deferred_input": _short_input(deferred.input),
             },
         )
+        # Interactive wait: the human can chat with the supervisor before
+        # deciding. Approve/deny (button) or stop ends the wait; a chat message
+        # is fed to the agent and its reply streams back, without resolving the
+        # gate. Checkpoints are suspended so the chat doesn't nest another one.
+        event_state["deferring"] = False
+        event_state["suspend_checkpoints"] = True
+        answer = None
+        try:
+            while answer is None:
+                ans = hitl.poll_answer(session_id, rid)
+                if ans is not None:
+                    answer = ans
+                    break
+                if hitl.is_stop_requested(session_id):
+                    hitl.clear_stop(session_id)
+                    hitl.resolve_request(session_id, rid, "interrupted")
+                    answer = {"decision": "interrupted", "note": ""}
+                    break
+                msgs = hitl.drain_chat(session_id)
+                if msgs:
+                    for m in msgs:
+                        await client.query(
+                            "[Human message during checkpoint review]\n"
+                            + m.get("text", "")
+                        )
+                        await _process_message_stream(client, session_id, event_state)
+                else:
+                    await asyncio.sleep(0.5)
+        finally:
+            event_state["suspend_checkpoints"] = False
 
         event_state["last_checkpoint_count"] = count
-        event_state["deferring"] = False
 
         decision = answer.get("decision", "reject")
         note = answer.get("note") or ""
