@@ -403,6 +403,19 @@ if check_login():
                                     with st.expander("Diff", expanded=True):
                                         st.code(diff_preview, language="diff")
 
+                            elif kind == "skill_proposal":
+                                desc = payload.get("description", "")
+                                overwrite = payload.get("overwrite", False)
+                                if desc:
+                                    st.caption(
+                                        desc
+                                        + (" · ⚠ overwrites an existing skill" if overwrite else "")
+                                    )
+                                skill_md = payload.get("skill_md", "")
+                                if skill_md:
+                                    with st.expander("SKILL.md", expanded=True):
+                                        st.code(skill_md, language="markdown")
+
                             note = st.text_input("Optional Note", key=f"note_{req_id}")
                             c1, c2 = st.columns(2)
                             if c1.button("Approve", key=f"app_{req_id}", type="primary"):
@@ -614,6 +627,15 @@ if check_login():
                         n_event = event.get("event_count", "?")
                         ckpt_summary = event.get("summary", "")
                         st.markdown(f"**Checkpoint** ({n_event} events)\n\n{ckpt_summary}")
+                elif kind == "skill.proposed":
+                    with st.chat_message("assistant"):
+                        st.markdown(f"💡 Proposed skill: `{event.get('name', '?')}` — awaiting your approval.")
+                elif kind == "skill.approved":
+                    with st.chat_message("assistant"):
+                        st.success(f"🧩 Saved skill: `{event.get('name', '?')}` — available to future sessions.")
+                elif kind == "skill.rejected":
+                    with st.chat_message("assistant"):
+                        st.info(f"Skill `{event.get('name', '?')}` was not saved.")
                 elif actor == "human" and event.get("text"):
                     with st.chat_message("user"):
                         st.markdown(event.get("text"))

@@ -305,10 +305,49 @@ async def run_session(
         async with ClaudeSDKClient(options=options) as client:
             await client.query(first_turn)
             await _turn_loop(client, session_id, event_state)
+            if event_state.get("completed_naturally"):
+                await _maybe_propose_skill(client, session_id, event_state)
     finally:
         sdk_id = event_state.get("sdk_session_id")
         if sdk_id:
             settings.write_sdk_session(session_id, sdk_id, prior_turns + 1)
+
+
+async def _maybe_propose_skill(client, session_id: str, event_state: dict) -> None:
+    """End-of-turn reflection (R7): after a turn finishes naturally, invite the
+    supervisor to crystallize a reusable workflow into a skill via the
+    ``propose_skill`` tool (HITL-gated). Guarded so trivial turns don't reflect
+    and disable-able via ``settings.SKILL_REFLECTION``."""
+    if not settings.SKILL_REFLECTION:
+        return
+    # Only reflect when the turn did substantive work (>= 2 supervisor tool calls).
+    if event_state.get("event_count", 0) < 2:
+        return
+
+    existing = skills.list_skills()
+    existing_txt = (
+        "\n".join(f"- {s['name']}: {s['description']}" for s in existing) or "(none yet)"
+    )
+    # Suspend the checkpoint gate so this short reflection pass isn't deferred.
+    event_state["suspend_checkpoints"] = True
+    try:
+        await client.query(
+            "[Reflection] Before we finish: review the workflow you just completed."
+            " If — and ONLY if — it followed a coherent, reusable procedure likely to"
+            " help in a FUTURE session (not a one-off), call the `propose_skill` tool"
+            " to save it for the human to approve: a short kebab-case `name`, a"
+            " one-line `description` of when to use it, and a concise step-by-step"
+            " `body`. Do NOT duplicate an existing skill. If nothing is reusable,"
+            " reply 'NONE' and call no tool.\n\n"
+            f"Existing skills:\n{existing_txt}"
+        )
+        await _process_message_stream(client, session_id, event_state)
+    except Exception as e:
+        eventlog.append(
+            session_id, actor="system", kind="skill.reflection_error", error=str(e)
+        )
+    finally:
+        event_state["suspend_checkpoints"] = False
 
 
 async def _turn_loop(client, session_id: str, event_state: dict) -> None:
@@ -322,6 +361,7 @@ async def _turn_loop(client, session_id: str, event_state: dict) -> None:
     while True:
         result = await _process_message_stream(client, session_id, event_state)
         if result is None:
+            event_state["completed_naturally"] = True
             eventlog.append(
                 session_id, actor="system", kind="research.complete", reason="finished"
             )
@@ -329,6 +369,7 @@ async def _turn_loop(client, session_id: str, event_state: dict) -> None:
 
         deferred = getattr(result, "deferred_tool_use", None)
         if deferred is None:
+            event_state["completed_naturally"] = True
             eventlog.append(
                 session_id, actor="system", kind="research.complete", reason="finished"
             )

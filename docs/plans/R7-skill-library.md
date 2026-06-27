@@ -24,9 +24,9 @@ The evolution loop is purely human-commanded today. We want it *guided*: when a 
 - [x] 4. `research/runtime.py` `_build_options`: `skills="all"`, `setting_sources=["project"]`; register `propose_skill` + allow `mcp__propose_skill`.
 - [x] 5a. In-process verification: store round-trip + propose_skill approve/reject/chat-reply/guard flows + tenancy dir (15/15).
 - [ ] 5b. Live verification: hand-write a skill into a user root, confirm the supervisor discovers + invokes it (batched into final live check).
-- [ ] 6. `research/runtime.py`: after `_turn_loop` natural finish, a guarded reflection nudge (`client.query` + drain) so the agent can call `propose_skill`. Skip on stop/interrupt/reject and on trivial turns.
-- [ ] 7. `research/supervisor_prompt.md`: document the `propose_skill` capability + when to use it (reusable, recurring workflows only; don't duplicate existing skills).
-- [ ] 8. `ui/app.py`: render the `skill_proposal` HITL (name/description + SKILL.md preview) and `skill.*` events in the stream.
+- [x] 6. `research/runtime.py`: `_maybe_propose_skill` after natural finish (guarded by `SKILL_REFLECTION` + `event_count >= 2`; suspends checkpoints; `client.query` + drain). Skips on stop/interrupt/reject.
+- [x] 7. `research/supervisor_prompt.md`: documented `propose_skill` + the Skill tool (reusable/recurring only; not system modification).
+- [x] 8. `ui/app.py`: `skill_proposal` HITL (description + SKILL.md preview) + `skill.proposed/approved/rejected` events.
 - [ ] 9. End-to-end live verification + container reload; push.
 
 ## Files touched
