@@ -18,11 +18,12 @@ The evolution loop is purely human-commanded today. We want it *guided*: when a 
 - **Audit:** `skill.proposed` / `skill.approved` / `skill.rejected` events; proposals archived under the user's state for inspection.
 
 ## Steps
-- [ ] 1. `scaffold/settings.py`: add `skills_dir(root?)` helper + a `SKILL_REFLECTION` on/off env flag.
-- [ ] 2. `api/tenancy.py` (`_ensure_runtime_dirs`): create `<root>/.claude/skills/` for every user (covers existing users too).
-- [ ] 3. `scaffold/skills.py` (new): `list_skills()`, `skill_path(name)`, `save_skill(name, content)`, `build_skill_md(name, description, body)`, and `make_propose_skill_server(session_id, agent_id)` (the `propose_skill` MCP tool: validate name, build SKILL.md, `hitl.ask(kind="skill_proposal")`, write on approve, archive + log).
-- [ ] 4. `research/runtime.py` `_build_options`: set `skills="all"`, `setting_sources=["project"]`; register the `propose_skill` server + allow `mcp__propose_skill`.
-- [ ] 5. Phase-1 verification: hand-write a skill into a user root, confirm the supervisor discovers + invokes it (live); confirm `propose_skill` → HITL → write loop works.
+- [x] 1. `scaffold/settings.py`: `SKILLS_DIR`, `SKILL_PROPOSALS_ARCHIVE`, `SKILL_REFLECTION` flag; `ensure_runtime_dirs` makes the skills dir.
+- [x] 2. `api/tenancy.py` (`_ensure_runtime_dirs`): create `<root>/.claude/skills/` (+ archive) for every user.
+- [x] 3. `scaffold/skills.py` (new): `list_skills()`, `skill_path`, `save_skill`, `build_skill_md`, `run_proposal` (testable) + `make_propose_skill_server`.
+- [x] 4. `research/runtime.py` `_build_options`: `skills="all"`, `setting_sources=["project"]`; register `propose_skill` + allow `mcp__propose_skill`.
+- [x] 5a. In-process verification: store round-trip + propose_skill approve/reject/chat-reply/guard flows + tenancy dir (15/15).
+- [ ] 5b. Live verification: hand-write a skill into a user root, confirm the supervisor discovers + invokes it (batched into final live check).
 - [ ] 6. `research/runtime.py`: after `_turn_loop` natural finish, a guarded reflection nudge (`client.query` + drain) so the agent can call `propose_skill`. Skip on stop/interrupt/reject and on trivial turns.
 - [ ] 7. `research/supervisor_prompt.md`: document the `propose_skill` capability + when to use it (reusable, recurring workflows only; don't duplicate existing skills).
 - [ ] 8. `ui/app.py`: render the `skill_proposal` HITL (name/description + SKILL.md preview) and `skill.*` events in the stream.

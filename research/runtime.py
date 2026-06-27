@@ -31,7 +31,7 @@ from claude_agent_sdk import (
     ToolUseBlock,
 )
 from claude_agent_sdk.types import HookMatcher
-from scaffold import bus, config_loader, eventlog, hitl, settings, spawn, tools_registry
+from scaffold import bus, config_loader, eventlog, hitl, settings, skills, spawn, tools_registry
 from scaffold._atomic import read_json
 
 
@@ -91,6 +91,13 @@ def _build_options(
     mcp_servers, allowed = tools_registry.build_tools(
         session_id, SUPERVISOR_AGENT_ID, sup.tools
     )
+
+    # R7: let the supervisor crystallize a reusable workflow into a skill
+    # (HITL-gated). Always available to the supervisor, independent of role YAML.
+    mcp_servers["propose_skill"] = skills.make_propose_skill_server(
+        session_id, SUPERVISOR_AGENT_ID
+    )
+    allowed = list(allowed) + ["mcp__propose_skill"]
 
     agents = spawn.build_agent_definitions(subs)
 
@@ -168,6 +175,11 @@ def _build_options(
         permission_mode="acceptEdits",
         cwd=str(settings.ROOT),
         hooks=hooks,
+        # R7: discover this user's saved skills. "all" injects the Skill tool;
+        # setting_sources=["project"] scopes discovery to <cwd>/.claude/skills
+        # (= the user's root), not the container's ~/.claude.
+        skills="all",
+        setting_sources=["project"],
         # When resuming, the SDK replays the prior conversation transcript so
         # the supervisor keeps full context across turns/subprocess restarts.
         resume=resume_uuid,

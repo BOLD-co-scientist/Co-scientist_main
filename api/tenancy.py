@@ -132,6 +132,10 @@ def _ensure_runtime_dirs(root: Path) -> None:
         root / "state" / "library" / ".staging",
         root / "state" / "memory",
         root / "state" / "archive" / "evolutions",
+        root / "state" / "archive" / "skills",
+        # Per-user skill library (R7). Discovered by the SDK as project skills
+        # relative to the runtime's cwd (= this root).
+        root / ".claude" / "skills",
         root / "worktrees",
         root / "researcher_data",
     ):

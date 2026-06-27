@@ -21,6 +21,11 @@ CLAUDE_CONFIG_DIR = Path(
 )
 GLOBAL_MEMORY = STATE / "memory" / "global.jsonl"
 EVOLUTIONS_ARCHIVE = STATE / "archive" / "evolutions"
+# Per-user skill library. Discovered by the SDK as "project" skills relative to
+# the agent's cwd (= ROOT in the per-tenant runtime subprocess), so each user's
+# instance accrues its own skills. See docs/plans/R7-skill-library.md.
+SKILLS_DIR = ROOT / ".claude" / "skills"
+SKILL_PROPOSALS_ARCHIVE = STATE / "archive" / "skills"
 LIBRARY = STATE / "library"
 LIBRARY_STAGING = LIBRARY / ".staging"
 LIBRARY_EVENTS = STATE / "library_events.jsonl"
@@ -43,6 +48,10 @@ MAX_TURNS = int(os.environ.get("COSCIENTIST_MAX_TURNS", "80"))
 
 CHECKPOINT_EVENT_INTERVAL = 10
 
+# Whether a research turn reflects at its end and may propose saving a reusable
+# workflow as a skill (HITL-gated). Off → no reflection round-trip. See R7.
+SKILL_REFLECTION = os.environ.get("COSCIENTIST_SKILL_REFLECTION", "1") not in ("0", "false", "False", "")
+
 PYEXEC_CPU_SECONDS = int(os.environ.get("COSCIENTIST_PYEXEC_CPU_SECONDS", "60"))
 PYEXEC_MEM_MB = int(os.environ.get("COSCIENTIST_PYEXEC_MEM_MB", "1024"))
 
@@ -52,6 +61,7 @@ def ensure_runtime_dirs() -> None:
     LIBRARY.mkdir(parents=True, exist_ok=True)
     LIBRARY_STAGING.mkdir(parents=True, exist_ok=True)
     CLAUDE_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    SKILLS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def session_dir(session_id: str) -> Path:
