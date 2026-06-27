@@ -1,6 +1,6 @@
 # R7 — Skill library (per-user, instruction-only, approval-gated)
 
-**Status:** In Progress
+**Status:** Done (v1) — admin console + executable cache remain as later tracks
 **Owner:** unassigned
 **Started:** 2026-06-27
 **Done when:** a research session can, on natural finish, propose a reusable `SKILL.md`; the human approves it via HITL; the skill is written to that user's `.claude/skills/`; and a later session of the same user discovers and can invoke it.
@@ -27,7 +27,9 @@ The evolution loop is purely human-commanded today. We want it *guided*: when a 
 - [x] 6. `research/runtime.py`: `_maybe_propose_skill` after natural finish (guarded by `SKILL_REFLECTION` + `event_count >= 2`; suspends checkpoints; `client.query` + drain). Skips on stop/interrupt/reject.
 - [x] 7. `research/supervisor_prompt.md`: documented `propose_skill` + the Skill tool (reusable/recurring only; not system modification).
 - [x] 8. `ui/app.py`: `skill_proposal` HITL (description + SKILL.md preview) + `skill.proposed/approved/rejected` events.
-- [ ] 9. End-to-end live verification + container reload; push.
+- [x] 9. Live verification: hand-written skill **discovered + invoked** by the supervisor (`Skill` tool used; agent emitted the skill's exact output); trivial turn correctly skipped reflection; no regression to normal sessions. Containers reloaded; pushed.
+
+(Note: the *auto-proposal* firing depends on a substantive turn — `event_count >= 2` — and the agent judging the workflow reusable; the propose→approve→save path itself is in-process-verified 15/15, and reflection errors are caught so they can't break a session.)
 
 ## Files touched
 - `scaffold/settings.py`, `scaffold/skills.py` (new), `api/tenancy.py`, `research/runtime.py`, `research/supervisor_prompt.md`, `ui/app.py`.

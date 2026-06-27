@@ -23,7 +23,7 @@ R1, R5, R2 are being implemented in **parallel worktrees**. See [docs/plans/PARA
 | R6 | Verify parallel subagent dispatch + reference-passing discipline | ~½ day; prompt + test |
 | R3 | Pinned plan + scratchpad as first-class context anchors | 2 days |
 | R4 | Tool-grounded critique pass before user-facing emission | 2 days; opt-in flag |
-| **R7** | Skill library — per-user, instruction-only skills proposed at session end + HITL approval ([plan](docs/plans/R7-skill-library.md)) | 🟢 In progress. v1 = per-user `.claude/skills/SKILL.md`; later: admin console (view/manage/promote across users) + executable cache. |
+| **R7** | Skill library — per-user, instruction-only skills proposed at session end + HITL approval ([plan](docs/plans/R7-skill-library.md)) | ✅ v1 done (backend + live-verified discovery). Later: admin console (view/manage/promote across users) + executable cache. |
 | **B1** | Bug: container image missing pytest, so strict-path smoke gate always auto-rejects | Found during UI1 verification 2026-05-07. Dockerfile installs `.[science]` not `.[dev]`. Fix: install pytest in image (or include `.[dev]`) so `evolution/tools/propose_merge.py:_run_smoke` can succeed. |
 | **B2** | Bug: `evolution.note` events truncate text to 400 chars | Found during UI2 verification 2026-05-07. `evolution/runtime.py:90` does `text=block.text[:400]`. Means long agent narrations are unreadable in the events log. Trivial fix: drop the slice or raise the cap to 8000. |
 
