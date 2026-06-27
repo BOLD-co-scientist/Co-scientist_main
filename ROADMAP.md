@@ -23,7 +23,7 @@ R1, R5, R2 are being implemented in **parallel worktrees**. See [docs/plans/PARA
 | R6 | Verify parallel subagent dispatch + reference-passing discipline | ~½ day; prompt + test |
 | R3 | Pinned plan + scratchpad as first-class context anchors | 2 days |
 | R4 | Tool-grounded critique pass before user-facing emission | 2 days; opt-in flag |
-| R7 | Skill library substrate (Voyager-style executable cache) | 2 days; evolution agent populates |
+| **R7** | Skill library — per-user, instruction-only skills proposed at session end + HITL approval ([plan](docs/plans/R7-skill-library.md)) | 🟢 In progress. v1 = per-user `.claude/skills/SKILL.md`; later: admin console (view/manage/promote across users) + executable cache. |
 | **B1** | Bug: container image missing pytest, so strict-path smoke gate always auto-rejects | Found during UI1 verification 2026-05-07. Dockerfile installs `.[science]` not `.[dev]`. Fix: install pytest in image (or include `.[dev]`) so `evolution/tools/propose_merge.py:_run_smoke` can succeed. |
 | **B2** | Bug: `evolution.note` events truncate text to 400 chars | Found during UI2 verification 2026-05-07. `evolution/runtime.py:90` does `text=block.text[:400]`. Means long agent narrations are unreadable in the events log. Trivial fix: drop the slice or raise the cap to 8000. |
 
@@ -33,6 +33,9 @@ R1, R5, R2 are being implemented in **parallel worktrees**. See [docs/plans/PARA
 |---|---|---|---|---|
 | **UI1** | Evolution pane in Streamlit chat | ✅ Done (backend-verified) | [UI1-evolution-pane.md](docs/plans/UI1-evolution-pane.md) | `feat/evolution_ui` |
 | **UI2** | Persistent context library (upload once, use everywhere) | ✅ Done (backend-verified) | [UI2-context-library.md](docs/plans/UI2-context-library.md) | `feat/evolution_ui` |
+| **UI3** | Full custom React SPA — replace Streamlit (real design freedom + SSE, no rerun jank) | 🔵 Deferred (brief ready) | [frontend-design-brief.md](docs/frontend-design-brief.md) | _(unstarted)_ |
+
+**UI3 context (decided 2026-06-24).** The Streamlit UI hits a design ceiling (boxy layout, no glassmorphism, 2s full-page autorefresh jank). The backend is already a clean REST + SSE API, so a custom SPA (Vite + React + TS + Tailwind) is a *new client*, not a rearchitecture — spec'd in [docs/frontend-design-brief.md](docs/frontend-design-brief.md) (includes a verified API/SSE/auth appendix). The hard part is integration (Bearer auth, the SSE-can't-use-EventSource gotcha, authenticated up/downloads, CORS/same-origin), so the intended labor split is **Claude Design → visuals/mockup, Claude Code → wiring against the live backend**. Interim option when desired: beautify the existing Streamlit UI (theme + CSS) for a cheap win. Trigger to start UI3: when design/UX becomes a priority (external users or a demo).
 
 ## 🔵 Later (deferred — needs evidence first)
 
