@@ -8,5 +8,6 @@ tools:
   - fs_read
   - fs_write_workspace
   - py_exec
+  - longjob
 can_spawn: false
 hitl_level: default
