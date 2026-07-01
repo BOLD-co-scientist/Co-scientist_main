@@ -53,8 +53,8 @@ Whichever we pick, the launched job must obey BOLD: **non-root `--user $(id -u):
 - Deploy: `deploy/README-spooler.md` + `coscientist-spooler.service`; compose sets `COSCIENTIST_SPOOL_DIR`/`COSCIENTIST_JOB_IMAGE`.
 
 ### Phase 3 — Auto-bring-up + routing
-- [ ] 11. `py_exec` cap-exceeded returns a structured "escalate to longjob" result (not a bare timeout), so the agent re-dispatches instead of losing the work.
-- [ ] 12. Supervisor/data_analyst prompt guidance: when to use `longjob` vs `py_exec`; declare resources.
+- [x] 11. `py_exec` cap-exceeded (wall-clock timeout OR SIGXCPU) returns a structured "escalate to longjob" result, so the agent re-dispatches instead of losing the work.
+- [x] 12. `prompts/data_analyst.md`: when to use `longjob` vs `py_exec` (py_exec = short only; heavy/GPU → longjob).
 
 ### Phase 4 — Verify + roll out
 - [ ] 13. Curl-driven backend pass: a session dispatches a trivial long job (local backend), polls to done, fetches output.
