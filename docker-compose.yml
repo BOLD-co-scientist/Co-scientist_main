@@ -28,6 +28,10 @@ services:
     env_file: .env
     environment:
       COSCIENTIST_ROOT: /app
+      # R12 long-job runner: global spool under the state mount (host ./state/jobspool).
+      # The host-side spooler (deploy/flair_spooler.py) launches the actual GPU jobs.
+      COSCIENTIST_SPOOL_DIR: /app/state/jobspool
+      COSCIENTIST_JOB_IMAGE: ${COSCIENTIST_JOB_IMAGE:-}
     network_mode: service:tailscale
     depends_on:
       - tailscale

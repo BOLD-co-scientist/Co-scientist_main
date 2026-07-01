@@ -7,6 +7,7 @@ import asyncio
 import os
 import resource
 import shutil
+import signal
 import sys
 import textwrap
 import uuid
@@ -16,6 +17,22 @@ from typing import Any
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
 from scaffold import settings
+
+
+def _escalation_text(reason: str) -> str:
+    """Guidance returned when a snippet blows past the local py_exec cap, so the
+    agent re-dispatches to the long-job runner instead of losing the work (R12
+    Phase 3 auto-escalation). See docs/plans/R12-longjob-runner.md."""
+    return (
+        f"ERROR: {reason} — py_exec is for SHORT computations only "
+        f"(~{settings.PYEXEC_CPU_SECONDS}s CPU cap). This is a long or heavy job, "
+        "so do NOT retry it here. Re-dispatch it via the `longjob` tool: call "
+        "`longjob.submit` with the same work as `command`, `backend=\"flair-docker\"` "
+        "for GPU/heavy jobs (or `\"local\"` for a long CPU job), and resources "
+        "(`cpu`, `gpu`, `walltime_min`, `image`). It runs asynchronously — you get "
+        "a job_id to poll with `longjob.status`/`wait` and read results with "
+        "`longjob.fetch`. The human approves the resource request first."
+    )
 
 
 _PRELUDE = textwrap.dedent("""
@@ -36,7 +53,7 @@ def _set_limits():
         pass
 
 
-def make_server(session_id: str):
+def make_tools(session_id: str):
     @tool("run", "Execute Python code in an ephemeral subprocess. Returns stdout+stderr.", {
         "code": str,
     })
@@ -76,10 +93,21 @@ def make_server(session_id: str):
             )
         except asyncio.TimeoutError:
             proc.kill()
-            return {"content": [{"type": "text", "text": "ERROR: execution timeout"}], "isError": True}
+            # Blocked past the wall-clock cap (I/O-bound / sleeping) → escalate.
+            return {"content": [{"type": "text", "text": _escalation_text(
+                f"execution timed out after {settings.PYEXEC_CPU_SECONDS + 5}s"
+            )}], "isError": True}
 
         out = (stdout or b"").decode("utf-8", errors="replace")
         err = (stderr or b"").decode("utf-8", errors="replace")
+        # CPU-bound jobs hit RLIMIT_CPU first: the kernel kills them with SIGXCPU
+        # (returncode == -SIGXCPU). Treat that as "too big for py_exec" and
+        # escalate rather than reporting an opaque signal death.
+        if proc.returncode in (-signal.SIGXCPU, -signal.SIGKILL):
+            return {"content": [{"type": "text", "text": _escalation_text(
+                f"job exceeded the {settings.PYEXEC_CPU_SECONDS}s CPU limit "
+                f"(killed by signal {-proc.returncode})"
+            )}], "isError": True}
         text = f"[exit {proc.returncode}]\n--- stdout ---\n{out}\n--- stderr ---\n{err}"
         # Preserve scratch dir for inspection.
         return {"content": [{"type": "text", "text": text}]}
@@ -92,4 +120,8 @@ def make_server(session_id: str):
             sd.mkdir(parents=True, exist_ok=True)
         return {"content": [{"type": "text", "text": "scratch cleared"}]}
 
-    return create_sdk_mcp_server("py_exec", "0.1.0", tools=[run_, clear_])
+    return [run_, clear_]
+
+
+def make_server(session_id: str):
+    return create_sdk_mcp_server("py_exec", "0.1.0", tools=make_tools(session_id))

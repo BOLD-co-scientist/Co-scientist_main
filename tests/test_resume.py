@@ -48,43 +48,76 @@ def test_sdk_session_roundtrip(fresh_root):
     assert s.read_sdk_session(sid) == "def-456-uuid"
 
 
-@pytest.fixture
-def api(fresh_root):
-    """A TestClient over a freshly-rooted api.server."""
-    from fastapi.testclient import TestClient
+def _seed_base(root: Path) -> None:
+    """Seed the source dirs into the tmp root so tenancy can bootstrap a user."""
+    import shutil
 
+    source = Path(__file__).resolve().parents[1]
+    for name in ("scaffold", "research", "evolution", "tools", "roles", "prompts", "tests"):
+        target = root / name
+        if not target.exists():
+            shutil.copytree(source / name, target)
+    for name in ("pyproject.toml", "Dockerfile", "README.md", "CLAUDE.md", "ROADMAP.md", ".gitignore"):
+        src = source / name
+        if src.exists():
+            (root / name).write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+
+
+@pytest.fixture
+def authed(tmp_path, monkeypatch):
+    """A TestClient over a freshly-rooted, multi-tenant api.server + one user."""
+    monkeypatch.setenv("COSCIENTIST_ROOT", str(tmp_path))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / ".claude"))
+    _seed_base(tmp_path)
+    from scaffold import settings as s
+
+    importlib.reload(s)
+    import api.auth as auth
+    import api.tenancy as tenancy
     import api.server as srv
 
+    importlib.reload(auth)
+    importlib.reload(tenancy)
     importlib.reload(srv)
-    return srv, TestClient(srv.app)
+    from fastapi.testclient import TestClient
+
+    user, key = auth.create_user("alice")
+    ctx = tenancy.context_for(user)
+    headers = {"Authorization": f"Bearer {key}"}
+    return srv, ctx, TestClient(srv.app), headers
 
 
-def test_messages_404_unknown_session(api):
-    _srv, client = api
-    r = client.post("/research/sessions/does-not-exist/messages", json={"text": "hi"})
+def test_messages_401_without_auth(authed):
+    _srv, _ctx, client, _headers = authed
+    r = client.post("/research/sessions/whatever/messages", json={"text": "hi"})
+    assert r.status_code == 401
+
+
+def test_messages_404_unknown_session(authed):
+    _srv, _ctx, client, headers = authed
+    r = client.post("/research/sessions/does-not-exist/messages", json={"text": "hi"}, headers=headers)
     assert r.status_code == 404
 
 
-def test_messages_409_when_busy(api):
-    srv, client = api
+def test_messages_409_when_busy(authed):
+    srv, ctx, client, headers = authed
     sid = "busy-session"
-    srv.settings.ensure_session_dirs(sid)
+    srv._ensure_session_dirs(ctx, sid)
     # Even with a resumable uuid present, a running turn must block follow-ups.
-    srv.settings.write_sdk_session(sid, "uuid-x", turns=1)
-    srv._RUNNING[sid] = object()  # sentinel: a turn is "running"
+    srv._RUNNING[srv._monitor_key(ctx, sid)] = object()  # sentinel: a turn is "running"
     try:
-        r = client.post(f"/research/sessions/{sid}/messages", json={"text": "hi"})
+        r = client.post(f"/research/sessions/{sid}/messages", json={"text": "hi"}, headers=headers)
         assert r.status_code == 409
         assert "busy" in r.json()["detail"].lower()
     finally:
-        srv._RUNNING.pop(sid, None)
+        srv._RUNNING.pop(srv._monitor_key(ctx, sid), None)
 
 
-def test_messages_409_when_no_prior_turn(api):
-    srv, client = api
+def test_messages_409_when_no_prior_turn(authed):
+    srv, ctx, client, headers = authed
     sid = "no-uuid-session"
-    srv.settings.ensure_session_dirs(sid)  # session exists but never produced a uuid
-    r = client.post(f"/research/sessions/{sid}/messages", json={"text": "hi"})
+    srv._ensure_session_dirs(ctx, sid)  # session exists but never produced a uuid
+    r = client.post(f"/research/sessions/{sid}/messages", json={"text": "hi"}, headers=headers)
     assert r.status_code == 409
     assert "resumable" in r.json()["detail"].lower()
 

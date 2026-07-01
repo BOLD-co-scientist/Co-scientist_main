@@ -1,0 +1,24 @@
+# User systemd unit for the FLAIR long-job spooler (R12).
+# Install:  cp to ~/.config/systemd/user/coscientist-spooler.service
+#           edit WorkingDirectory + the two paths below, then
+#           systemctl --user enable --now coscientist-spooler
+#
+# Runs as YOUR user (systemctl --user) — never as root (BOLD Rule 1).
+[Unit]
+Description=coscientist FLAIR long-job spooler
+After=docker.service
+
+[Service]
+Type=simple
+# EDIT: absolute path to the repo checkout on the node
+WorkingDirectory=%h/coscientist
+Environment=COSCIENTIST_SPOOL_DIR_HOST=%h/coscientist/state/jobspool
+Environment=COSCIENTIST_HOST_STATE_ROOT=%h/coscientist/state
+# Optional: restrict which images jobs may use
+# Environment=COSCIENTIST_ALLOWED_IMAGES=%u_cojob:dev
+ExecStart=/usr/bin/env python3 deploy/flair_spooler.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

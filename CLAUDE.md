@@ -80,6 +80,7 @@ These are the safety guarantees. Don't break them when modifying scaffold:
 2. **Worktree path-guard for evolution edits.** `evolution/tools/edit.py` and `bash_sandbox.py` validate every path is inside the active worktree. **Enforced at the tool layer, not in the prompt.** If you change these tools, keep the guard.
 3. **Per-tool ephemeral execution.** `tools/py_exec/server.py` runs in a subprocess with `setrlimit` and a minimum env. Don't loosen this.
 4. **HITL is the final gate.** `scaffold/hitl.py` blocks via filesystem polling. The API answers via `state/sessions/<sid>/hitl/answered/`. Don't bypass.
+5. **Long-job spooler trust boundary (R12).** For long/GPU jobs, the non-root container only writes a job *request* to the spool (`tools/longjob/`); the host-side `deploy/flair_spooler.py` (running as the user, outside Docker) is the only thing that runs `docker`, and only argv it builds from validated fields. **Never** give the container the Docker socket (root-equivalent — would undo the non-root posture). The guard lives in the spooler, not the prompt. See `docs/plans/R12-longjob-runner.md`.
 
 **Stricter HITL for `scaffold/`, `evolution/`, `pyproject.toml`, `Dockerfile` edits**: smoke tests must pass in the worktree before the human is asked. See `evolution/tools/propose_merge.py`.
 
