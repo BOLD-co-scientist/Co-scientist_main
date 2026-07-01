@@ -104,6 +104,31 @@ def test_memory_recall(tmp_path, monkeypatch):
     assert any("knockout" in h["text"] for h in hits)
 
 
+def test_dockerfile_runs_nonroot():
+    """BOLD/FLAIR Rule 1: the container must NOT run as root. Enforce that the
+    Dockerfile keeps a non-root effective USER so a change (human or evolution
+    agent) can never silently reintroduce root. See docs/BOLD-server-guide.md."""
+    dockerfile = ROOT / "Dockerfile"
+    if not dockerfile.exists():
+        pytest.skip("no Dockerfile in this root")
+    # Effective USER = the last uncommented USER instruction.
+    users = []
+    for line in dockerfile.read_text(encoding="utf-8").splitlines():
+        s = line.strip()
+        if s.startswith("#") or not s:
+            continue
+        if s.split()[0].upper() == "USER":
+            users.append(s.split(maxsplit=1)[1].strip())
+    assert users, "Dockerfile must set a non-root USER (BOLD/FLAIR Rule 1)"
+    effective = users[-1]
+    # Strip any :group and ${...} default wrappers for the root check.
+    name = effective.split(":", 1)[0]
+    assert name not in ("root", "0"), (
+        f"Dockerfile must not run as root; effective USER is {effective!r} "
+        "(BOLD/FLAIR Rule 1 — see docs/BOLD-server-guide.md)"
+    )
+
+
 def test_sandbox_path_guard(tmp_path, monkeypatch):
     monkeypatch.setenv("COSCIENTIST_ROOT", str(tmp_path))
     import importlib

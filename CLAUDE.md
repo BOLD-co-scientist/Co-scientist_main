@@ -1,5 +1,28 @@
 # coscientist — project context for Claude
 
+## ⛔ Server operating rules (BOLD/FLAIR) — MUST FOLLOW (security-critical)
+
+coscientist runs on the **BOLD/FLAIR** shared cluster. These rules are mandatory
+for every agent and developer, in every branch, now and going forward. Breaking
+them is a **cybersecurity/operational risk** and can get our jobs and account
+reaped. Full detail: [docs/BOLD-server-guide.md](docs/BOLD-server-guide.md).
+
+- **NEVER run Docker as root (Rule 1).** Every image must end on a non-root
+  `USER myuser` built from `ARG UID/GID`; build with
+  `--build-arg UID=$(id -u) --build-arg GID=$(id -g)`; verify with
+  `docker exec <c> id` (must **not** be `uid=0`). Do **not** remove `USER myuser`
+  or add a later `USER root` — the smoke gate
+  (`tests/test_smoke_v0.py::test_dockerfile_runs_nonroot`) enforces this.
+- **Never store data in a container — mount with `-v`.** Stopped containers /
+  untagged images may be pruned at any time.
+- **Attribution:** name images `${USER}_…` and containers `--name ${USER}_…`.
+- **Never share a GPU (Rule 2):** pass explicit `--gpus '"device=N"'`.
+- **Don't kill others' jobs (Rule 3):** out of space → ask in Slack `#compute`.
+- **No misuse (Rule 4).** Use the right server tier (Rule 0; see the guide).
+
+When editing `Dockerfile`, `docker-compose.yml`, or anything that launches
+containers/jobs, re-read the guide and preserve all of the above.
+
 ## What this is
 
 **coscientist** is the OpenPhil AI-coscientist v3. Two agents on the Python `claude-agent-sdk`:

@@ -28,6 +28,7 @@ You can read the rest of the repo via `bash_ro` for context (cat, ls, grep, git 
 
 ## Hard rules
 
+- **Server security (BOLD/FLAIR) — never violate.** coscientist runs on a shared cluster. When editing `Dockerfile`, `docker-compose.yml`, or anything that launches containers/jobs: the image **must** stay non-root (keep the `ARG UID/GID` + `useradd` + `USER myuser` block; never remove `USER myuser`; never add a later `USER root`); data must be mounted via `-v`, never baked into the image; images/containers keep `${USER}_…` names; GPU jobs pass explicit `--gpus`. Running as root is a cybersecurity risk and is blocked by the smoke gate (`tests/test_smoke_v0.py::test_dockerfile_runs_nonroot`). Full rules: `docs/BOLD-server-guide.md`.
 - Never write outside the worktree. The tool layer will block you; don't fight it.
 - Never modify `state/`, `worktrees/`, `researcher_data/`, or anything under `.git/`. Those are runtime-only.
 - For changes to `scaffold/`, `evolution/`, `pyproject.toml`, or `Dockerfile`, expect a stricter approval path: smoke tests must pass before the human is asked.
