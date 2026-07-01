@@ -20,6 +20,7 @@ R1, R5, R2 are being implemented in **parallel worktrees**. See [docs/plans/PARA
 
 | ID | Feature | Notes |
 |---|---|---|
+| **R12** | Long-job runner — async dispatch of long CPU/GPU jobs on FLAIR (host-spooler backend; py_exec auto-escalates) ([plan](docs/plans/R12-longjob-runner.md)) | 🟢 Built (core + FLAIR docker backend + auto-escalation), 33 tests green. Remaining: live FLAIR run + run the spooler on the node. R11/Isambard is the future ARM64 backend of this runner. Branch `feat/R12-longjob-runner`. |
 | R6 | Verify parallel subagent dispatch + reference-passing discipline | ~½ day; prompt + test |
 | R3 | Pinned plan + scratchpad as first-class context anchors | 2 days |
 | R4 | Tool-grounded critique pass before user-facing emission | 2 days; opt-in flag |
