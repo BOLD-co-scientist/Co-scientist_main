@@ -120,7 +120,7 @@ def test_unknown_backend_errors(tmp_path, monkeypatch):
     sid = "bad"
     s.ensure_session_dirs(sid)
     submit_fn = _get_tool(server, "submit", sid)
-    res = asyncio.run(submit_fn({"command": "echo x", "backend": "flair-docker"}))
+    res = asyncio.run(submit_fn({"command": "echo x", "backend": "arm64-hpc"}))
     assert res.get("isError") and "not available yet" in _text(res)
 
 

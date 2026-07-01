@@ -48,6 +48,16 @@ MAX_TURNS = int(os.environ.get("COSCIENTIST_MAX_TURNS", "80"))
 
 CHECKPOINT_EVENT_INTERVAL = 10
 
+# R12 long-job runner. The spool is a shared directory both the container and the
+# host-side spooler daemon see (default: under the state mount, so no extra
+# mount). In the container, point COSCIENTIST_SPOOL_DIR at the GLOBAL state mount
+# (/app/state/jobspool) so one spooler serves all tenants. See
+# docs/plans/R12-longjob-runner.md and deploy/flair_spooler.py.
+LONGJOB_SPOOL_DIR = Path(os.environ.get("COSCIENTIST_SPOOL_DIR", str(STATE / "jobspool")))
+# Default docker image for FLAIR jobs (a job may override if allow-listed by the
+# spooler). Empty → the agent must pass an image in the JobSpec.
+LONGJOB_JOB_IMAGE = os.environ.get("COSCIENTIST_JOB_IMAGE", "")
+
 # Whether a research turn reflects at its end and may propose saving a reusable
 # workflow as a skill (HITL-gated). Off → no reflection round-trip. See R7.
 SKILL_REFLECTION = os.environ.get("COSCIENTIST_SKILL_REFLECTION", "1") not in ("0", "false", "False", "")

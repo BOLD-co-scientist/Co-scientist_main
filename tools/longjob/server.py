@@ -21,11 +21,13 @@ _TERMINAL = {base.DONE, base.FAILED}
 def _get_backend(name: str):
     if name == "local":
         return LocalBackend()
-    # Phase 2 backends land here once the dispatch-security fork is decided.
+    if name == "flair-docker":
+        from .backends.flair_docker import FlairDockerBackend
+        return FlairDockerBackend()
+    # arm64-hpc lands here once R11 Phase-0 recon is done.
     raise ValueError(
-        f"backend {name!r} is not available yet — only 'local' exists in R12 "
-        "Phase 1 (flair-docker / arm64-hpc are stubbed pending the dispatch "
-        "decision and R11 recon)."
+        f"backend {name!r} is not available yet — use 'local' or 'flair-docker' "
+        "('arm64-hpc' is stubbed pending R11 recon)."
     )
 
 

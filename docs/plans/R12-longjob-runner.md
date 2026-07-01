@@ -45,11 +45,12 @@ Whichever we pick, the launched job must obey BOLD: **non-root `--user $(id -u):
 - [ ] 5. Reconcile-on-resume: re-poll live jobs when a session subprocess restarts.
 - [x] 6. Tests (`tests/test_longjob.py`): submit→run→done→logs→fetch on local backend; HITL reject doesn't launch; handle round-trip; unknown-backend guard. 4/4 + smoke 9/9.
 
-### Phase 2 — FLAIR docker backend (after the dispatch-fork decision)
-- [ ] 7. Implement the chosen dispatch channel (host-spooler or ssh-guard) with the command allow-list guard at the tool layer.
-- [ ] 8. `backends/flair_docker.py`: build a BOLD-compliant `docker run` (non-root `--user`, explicit `--gpus`, `${USER}_…` name, `-v` mounts), detached; poll `docker ps/logs`; collect outputs from the mounted workdir.
-- [ ] 9. Resource caps + attribution enforced at the tool layer; GPU selection respects Rule 2 (never share).
-- [ ] 10. Negative test: the dispatch channel rejects anything but the allow-listed docker argv (no shell, no `--privileged`, no `-v /:…`).
+### Phase 2 — FLAIR docker backend (host-spooler chosen 2026-07-01)
+- [x] 7. Dispatch channel = **host-spooler**: `deploy/flair_spooler.py` runs on the node as the user; the container only writes a request (`tools/longjob/spool.py`). No docker/ssh in the container; the guard lives in the spooler.
+- [x] 8. `backends/flair_docker.py` (container) writes the request; the spooler builds a BOLD-compliant `docker run -d --user … --gpus … --name ${USER}_… -v workdir:/work` and polls `docker inspect/logs`; outputs land in the mounted workdir.
+- [x] 9. Non-root `--user` (spooler's own uid:gid, unspoofable); **free-GPU** selection (Rule 2); `${USER}_cojob_…` names; workdir-only mount; optional image allow-list.
+- [x] 10. Guard tests (`tests/test_longjob_flair.py`): path-escape rejected, argv has no `--privileged`/host mount, bad image/name/empty-command rejected, GPU pick + insufficient-GPU error.
+- Deploy: `deploy/README-spooler.md` + `coscientist-spooler.service`; compose sets `COSCIENTIST_SPOOL_DIR`/`COSCIENTIST_JOB_IMAGE`.
 
 ### Phase 3 — Auto-bring-up + routing
 - [ ] 11. `py_exec` cap-exceeded returns a structured "escalate to longjob" result (not a bare timeout), so the agent re-dispatches instead of losing the work.
