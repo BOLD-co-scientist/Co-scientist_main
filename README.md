@@ -7,11 +7,24 @@ OpenPhil AI coscientist v3. Two SDK agents — a hierarchical **research agent**
 ```
 git clone …
 cd coscientist
-cp .env.example .env       # add ANTHROPIC_API_KEY
-docker compose up
+cp .env.example .env                       # add ANTHROPIC_API_KEY
+echo "UID=$(id -u)" >> .env                # BOLD Rule 1: build/run as YOU, not root
+echo "GID=$(id -g)" >> .env
+# For FLAIR access, also set TAILSCALE_AUTHKEY in .env (see .env.example).
+docker compose up --build
 ```
 
-The API is then on `http://localhost:8765`. See [api/server.py](api/server.py) for endpoints.
+The container runs **non-root** (BOLD/FLAIR Rule 1 — see
+[docs/BOLD-server-guide.md](docs/BOLD-server-guide.md)). Verify after start:
+
+```
+docker exec ${USER}_coscientist-api id     # must NOT be uid=0(root)
+```
+
+**Access:** the compose serves the UI/API through the **tailscale funnel** (both
+containers share the tailscale netns), so on a FLAIR node reach it via the
+tailscale hostname, not `localhost`. If you don't use tailscale, drop the
+`tailscale` service from `docker-compose.yml` and publish ports directly.
 
 Create a user before logging into the UI:
 

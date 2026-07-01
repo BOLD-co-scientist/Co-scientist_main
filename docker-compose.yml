@@ -1,7 +1,7 @@
 services:
   tailscale:
     image: tailscale/tailscale:latest
-    container_name: coscientist-tailscale
+    container_name: ${USER}_coscientist-tailscale
     hostname: coscientist-ui
     env_file: .env
     environment:
@@ -24,7 +24,7 @@ services:
         UID: ${UID}
         GID: ${GID}
     image: ${USER}_coscientist:dev
-    container_name: coscientist-api
+    container_name: ${USER}_coscientist-api
     env_file: .env
     environment:
       COSCIENTIST_ROOT: /app
@@ -54,7 +54,7 @@ services:
         UID: ${UID}
         GID: ${GID}
     image: ${USER}_coscientist:dev
-    container_name: coscientist-ui
+    container_name: ${USER}_coscientist-ui
     env_file: .env
     environment:
       COSCIENTIST_ROOT: /app
