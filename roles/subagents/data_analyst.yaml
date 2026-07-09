@@ -9,5 +9,7 @@ tools:
   - fs_write_workspace
   - py_exec
   - longjob
+  - ocr
+  - latex_compile
 can_spawn: false
 hitl_level: default

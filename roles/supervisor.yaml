@@ -9,5 +9,7 @@ tools:
   - hitl
   - fs_read
   - fs_write_workspace
+  - deep_research
+  - latex_compile
 can_spawn: true
 hitl_level: default
