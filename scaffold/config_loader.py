@@ -67,3 +67,18 @@ def render(template: str, **values: str) -> str:
 def render_prompt(role: RoleConfig, **values: str) -> str:
     text = role.prompt_path.read_text(encoding="utf-8")
     return render(text, ROLE_NAME=role.name, **values)
+
+
+def output_format_guidance(fmt: str | None = None) -> str:
+    """Deliverable-format guidance block for the active output format (R13).
+
+    Reads ``prompts/output_format/<fmt>.md`` where ``fmt`` defaults to
+    ``settings.OUTPUT_FORMAT``. Falls back to the latex block if the requested
+    file is missing, so a bad env value never yields an empty directive.
+    Substituted into role prompts as ``{{OUTPUT_FORMAT_GUIDANCE}}``.
+    """
+    fmt = (fmt or settings.OUTPUT_FORMAT).strip().lower()
+    path = settings.PROMPTS / "output_format" / f"{fmt}.md"
+    if not path.exists():
+        path = settings.PROMPTS / "output_format" / "latex.md"
+    return path.read_text(encoding="utf-8").strip()
