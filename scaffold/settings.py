@@ -65,6 +65,32 @@ SKILL_REFLECTION = os.environ.get("COSCIENTIST_SKILL_REFLECTION", "1") not in ("
 PYEXEC_CPU_SECONDS = int(os.environ.get("COSCIENTIST_PYEXEC_CPU_SECONDS", "60"))
 PYEXEC_MEM_MB = int(os.environ.get("COSCIENTIST_PYEXEC_MEM_MB", "1024"))
 
+# R14 deep-research tool (OpenAI Deep Research API via the Responses API).
+# The tool is inert unless OPENAI_API_KEY is set — that presence is the enable
+# gate, so no HITL prompt fires on the mandated once-per-session scope call.
+# Set COSCIENTIST_DEEPRESEARCH_HITL=1 to gate every run behind a human approve.
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "")  # optional (Azure/proxy)
+DEEPRESEARCH_MODEL = os.environ.get(
+    "COSCIENTIST_DEEPRESEARCH_MODEL", "o4-mini-deep-research"
+)
+# How long the blocking `run` call polls before degrading to a background handle.
+DEEPRESEARCH_MAX_WAIT_S = int(os.environ.get("COSCIENTIST_DEEPRESEARCH_MAX_WAIT_S", "1200"))
+DEEPRESEARCH_POLL_S = int(os.environ.get("COSCIENTIST_DEEPRESEARCH_POLL_S", "10"))
+DEEPRESEARCH_HITL = os.environ.get("COSCIENTIST_DEEPRESEARCH_HITL", "0") not in (
+    "0", "false", "False", "",
+)
+
+# R13: default format for the *written deliverable files* a research session
+# produces under results/. "latex" → the agent emits a compilable .tex document
+# and compiles it to PDF via the `latex_compile` tool; "markdown" → the prior
+# human-readable .md behavior. Anything else falls back to "latex". This governs
+# deliverable files only, not the bus chat narration (which stays markdown).
+# See docs/plans/R13-latex-output.md.
+OUTPUT_FORMAT = os.environ.get("COSCIENTIST_OUTPUT_FORMAT", "latex").strip().lower()
+if OUTPUT_FORMAT not in ("latex", "markdown"):
+    OUTPUT_FORMAT = "latex"
+
 
 def ensure_runtime_dirs() -> None:
     """Create global runtime directories that exist outside any session."""
