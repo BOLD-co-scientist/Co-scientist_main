@@ -1,4 +1,4 @@
-"""Compile a LaTeX source file (living in the session results/ dir) to PDF (R13).
+r"""Compile a LaTeX source file (living in the session results/ dir) to PDF (R13).
 
 The supervisor, in the default `latex` output mode, writes its final deliverable
 as a self-contained `.tex` under results/ and then calls this tool to produce the
