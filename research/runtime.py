@@ -85,7 +85,11 @@ def _build_options(
 
     catalog = spawn.role_catalog_text(subs)
     system_prompt = config_loader.render_prompt(
-        sup, TASK=task_text, SUBAGENT_CATALOG=catalog, SESSION_ID=session_id
+        sup,
+        TASK=task_text,
+        SUBAGENT_CATALOG=catalog,
+        SESSION_ID=session_id,
+        OUTPUT_FORMAT_GUIDANCE=config_loader.output_format_guidance(),  # R13
     )
 
     mcp_servers, allowed = tools_registry.build_tools(
