@@ -56,6 +56,57 @@ class StartEvolutionResponse(BaseModel):
     command: str
 
 
+# ---- Hypothesis engine (Google AI co-scientist protocol) ----
+# CONTRACT STUBS ONLY — no /hypothesis/* endpoints are wired yet. These pin the
+# request/response shapes the UI and a future hypothesis.runtime will share, the
+# same way StartEvolutionRequest exists ahead of POST /evolution/commands.
+# Full design + steps: docs/plans/H1-hypothesis-coscientist.md.
+
+
+class HypothesisConfig(BaseModel):
+    """Knobs for a hypothesis session (all optional; sane server defaults)."""
+
+    n_initial: int | None = None  # candidates in the first generation round
+    max_rounds: int | None = None  # generation/tournament rounds before stopping
+
+
+class StartHypothesisRequest(BaseModel):
+    goal: str
+    session_id: str | None = None
+    config: HypothesisConfig | None = None
+
+
+class StartHypothesisResponse(BaseModel):
+    session_id: str
+    goal: str
+
+
+class HypothesisReview(BaseModel):
+    reviewer: str
+    verdict: str  # e.g. "supported" | "weak" | "refuted"
+    novelty: float | None = None
+    testability: float | None = None
+    correctness: float | None = None
+    note: str | None = None
+
+
+class HypothesisView(BaseModel):
+    id: str
+    statement: str
+    rationale: str = ""
+    # proposed | reviewed | top | evolved | parked | selected
+    state: str = "proposed"
+    elo: float = 1200.0  # tournament rating
+    round: int = 0
+    parent_ids: list[str] = []  # lineage for evolved hypotheses
+    reviews: list[HypothesisReview] = []
+
+
+class SelectHypothesisRequest(BaseModel):
+    hypothesis_id: str
+    note: str | None = None
+
+
 class HitlAnswer(BaseModel):
     decision: str  # "approve" | "reject"
     note: str | None = None
