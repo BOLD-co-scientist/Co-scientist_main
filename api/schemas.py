@@ -107,6 +107,14 @@ class SelectHypothesisRequest(BaseModel):
     note: str | None = None
 
 
+class RefineHypothesisRequest(BaseModel):
+    # Generate a fresh parallel set derived from the chosen hypothesis, optionally
+    # steered by free-form feedback ("what to do differently").
+    parent_id: str
+    feedback: str | None = None
+    n: int | None = None
+
+
 class HitlAnswer(BaseModel):
     decision: str  # "approve" | "reject"
     note: str | None = None
