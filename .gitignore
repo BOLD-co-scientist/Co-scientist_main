@@ -5,7 +5,7 @@ __pycache__/
 .env
 .env.local
 
-state/
+/state/
 worktrees/
 researcher_data/
 !researcher_data/.gitkeep
