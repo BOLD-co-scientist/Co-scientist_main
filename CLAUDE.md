@@ -167,6 +167,10 @@ docker compose up -d coscientist-api
 curl -X POST http://localhost:8765/research/sessions \
   -H 'Content-Type: application/json' \
   -d '{"task":"Summarize the LTEM growth-curve CSV and propose one hypothesis."}'
+# Final deliverables default to LaTeX (.tex + compiled .pdf in results/); set
+# COSCIENTIST_OUTPUT_FORMAT=markdown in .env to revert to .md. The container
+# image ships texlive + latexmk; the supervisor compiles via the latex_compile
+# tool. See docs/plans/R13-latex-output.md.
 
 # tail events for a session
 curl http://localhost:8765/events/<sid>

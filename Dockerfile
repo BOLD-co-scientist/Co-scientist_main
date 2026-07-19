@@ -11,6 +11,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         nodejs \
         npm \
+        tesseract-ocr \
+        poppler-utils \
+        texlive-latex-recommended \
+        texlive-latex-extra \
+        texlive-fonts-recommended \
+        latexmk \
     && rm -rf /var/lib/apt/lists/*
 
 RUN npm install -g @anthropic-ai/claude-code
