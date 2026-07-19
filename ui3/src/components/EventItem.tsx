@@ -29,6 +29,12 @@ export default function EventItem({ vm }: { vm: EventVM }) {
           <span style={{ fontFamily: "var(--mono)", fontSize: 11, color: vm.actorColor, flex: "0 0 auto" }}>{vm.glyph}</span>
           <span style={{ fontSize: 12.5, color: "var(--mid)", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
             {vm.actorLabel} used <span style={{ fontFamily: "var(--mono)", color: "var(--hi)" }}>{vm.tool}</span>
+            {vm.summary && (
+              <span style={{ color: "var(--lo)" }}>
+                {" · "}
+                <span style={{ fontFamily: "var(--mono)" }}>{vm.summary}</span>
+              </span>
+            )}
           </span>
           <span style={{ fontFamily: "var(--mono)", fontSize: 10.5, color: "var(--lo)" }}>{vm.time}</span>
           <span style={{ color: "var(--lo)", fontSize: 10, flex: "0 0 auto" }}>{open ? "\u25BE" : "\u25B8"}</span>

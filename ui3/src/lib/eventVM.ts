@@ -27,6 +27,7 @@ export type EventVM =
       actorLabel: string;
       glyph: string;
       tool: string;
+      summary: string; // one-line gist of the call (e.g. first line of a script)
       arg: string;
     }
   | { variant: "dispatch"; id: string; time: string; actorColor: string; actorLabel: string; target: string; body: string }
@@ -79,6 +80,47 @@ const SKILL_LABEL: Record<string, string> = {
 
 const humanize = (kind: string) => kind.replace(/[._]/g, " ");
 
+// SDK MCP tool names arrive as "mcp__<server>__<method>" (e.g.
+// "mcp__py_exec__run"). Show just the server ("py_exec"), which is the part a
+// human cares about; leave plain tool names (web_search, TodoWrite) untouched.
+function cleanTool(name: string): string {
+  const m = /^mcp__([^_].*?)__[^_].*$/.exec(name);
+  return m ? m[1] : name;
+}
+
+function firstLine(text: string, max = 72): string {
+  const line = text
+    .split("\n")
+    .map((l) => l.trim())
+    .find((l) => l.length > 0);
+  if (!line) return "";
+  const s = line.replace(/\s+/g, " ");
+  return s.length > max ? s.slice(0, max - 1) + "…" : s;
+}
+
+// Turn the runtime's `input_summary` (usually JSON of the tool input) into a
+// one-line gist for the collapsed row and a readable body for the expanded view.
+// The point: many back-to-back py_exec runs should show WHAT ran, not N
+// identical "used py_exec" rows.
+function describeToolInput(raw: string): { gist: string; full: string } {
+  if (!raw.trim()) return { gist: "", full: "" };
+  try {
+    const v = JSON.parse(raw);
+    if (v && typeof v === "object" && !Array.isArray(v)) {
+      // py_exec and friends carry the script under `code`; show it directly.
+      if (typeof v.code === "string") return { gist: firstLine(v.code), full: v.code };
+      // Otherwise summarise the first string-valued field (path, query, …).
+      const entries = Object.entries(v as Record<string, unknown>);
+      const strEntry = entries.find(([, val]) => typeof val === "string" && (val as string).trim());
+      if (strEntry) return { gist: firstLine(String(strEntry[1])), full: JSON.stringify(v, null, 2) };
+      return { gist: firstLine(JSON.stringify(v)), full: JSON.stringify(v, null, 2) };
+    }
+    return { gist: firstLine(String(v)), full: raw };
+  } catch {
+    return { gist: firstLine(raw), full: raw };
+  }
+}
+
 export function toVM(e: Ev, prev?: Ev): EventVM {
   const time = timeOf(e.ts);
   const showActor = !prev || prev.actor !== e.actor;
@@ -103,7 +145,10 @@ export function toVM(e: Ev, prev?: Ev): EventVM {
     return { variant: "spine", id: e.id, time, kind: e.kind, title, dot };
   }
 
-  if (e.kind === "tool.use" || e.kind === "tool.missing")
+  if (e.kind === "tool.use" || e.kind === "tool.missing") {
+    const rawTool = s("tool") ?? "tool";
+    const raw = firstStr("input_summary", "arg", "error", "detail") ?? "";
+    const { gist, full } = describeToolInput(raw);
     return {
       variant: "tool",
       id: e.id,
@@ -111,9 +156,13 @@ export function toVM(e: Ev, prev?: Ev): EventVM {
       actorColor: e.kind === "tool.missing" ? "var(--err)" : actorColor(e.actor),
       actorLabel: actorLabel(e.actor),
       glyph: actorGlyph(e.actor),
-      tool: (s("tool") ?? "tool") + (e.kind === "tool.missing" ? " (missing)" : ""),
-      arg: firstStr("arg", "error", "detail") ?? "",
+      tool: cleanTool(rawTool) + (e.kind === "tool.missing" ? " (missing)" : ""),
+      // A quick gist so back-to-back calls to the same tool (e.g. many py_exec
+      // runs) are distinguishable at a glance instead of N identical rows.
+      summary: gist,
+      arg: full,
     };
+  }
 
   if (e.kind === "bus.send")
     return {
