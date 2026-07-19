@@ -768,13 +768,14 @@ def peek_inbox(sid: str, agent: str, ctx: UserContext = Depends(_ctx)):
 
 
 @app.get("/git/history", response_model=schemas.GitHistory)
-def git_history(limit: int = 200):
-    """Full branch graph (all refs) for the UI to render. Read-only.
+def git_history(limit: int = 200, ctx: UserContext = Depends(_ctx)):
+    """Branch graph of the authenticated researcher's *own* harness repo.
 
-    The UI container has no ``.git`` mount, so it fetches this over HTTP from the
-    API container, which does. Reflects the shared system repo's evolution
-    history."""
+    Tenant-scoped: reflects only this user's evolution lineage — their
+    ``evo/*`` branches and merges into their own ``main`` — not the shared
+    development repo or any other tenant's history. A freshly bootstrapped
+    root with no self-modifications yet returns an empty graph."""
     try:
-        return sandbox.history(limit=limit)
+        return sandbox.history(limit=limit, repo=ctx.root)
     except sandbox.GitError as e:
         raise HTTPException(500, f"git history failed: {e}")

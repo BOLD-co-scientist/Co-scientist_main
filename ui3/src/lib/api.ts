@@ -150,7 +150,9 @@ function mapGit(r: Raw): GitHistory {
     const refs = ((c.refs as string[]) ?? []).map((name) => ({ name, kind: refKind(name) }));
     if (head && sha === head) refs.unshift({ name: "HEAD", kind: "head" as const });
     return {
-      sha: sha.slice(0, 9),
+      // Keep the full sha so parent→child edge matching works; components
+      // truncate for display. (Parents are full-length shas from git.)
+      sha,
       parents: (c.parents as string[]) ?? [],
       author: (c.author as string) ?? "",
       ts: typeof c.ts === "number" ? fmtEpoch(c.ts) : String(c.ts ?? ""),

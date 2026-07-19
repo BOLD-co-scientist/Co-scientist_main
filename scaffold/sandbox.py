@@ -97,8 +97,14 @@ _LOG_FMT = "%H%x1f%P%x1f%an%x1f%at%x1f%D%x1f%s"
 _FIELD_SEP = "\x1f"
 
 
-def history(limit: int = 200) -> dict:
-    """Read-only snapshot of the full branch graph across *all* refs.
+def history(limit: int = 200, repo: Path | None = None) -> dict:
+    """Read-only snapshot of the branch graph across *all* refs of ``repo``.
+
+    ``repo`` defaults to ``settings.ROOT``, but callers should pass a specific
+    repo path to scope the graph — e.g. the API passes the authenticated user's
+    own harness root so a researcher sees only *their* evolution lineage (their
+    ``evo/*`` branches and merges into their own ``main``), never the shared
+    development repo or another tenant's history.
 
     Returns ``{"commits": [...], "head": <sha|None>}`` where each commit is a
     dict ``{sha, parents, author, ts, refs, subject}``. Parents drive the graph
@@ -106,12 +112,19 @@ def history(limit: int = 200) -> dict:
     the UI can colour merged history apart from in-flight evolution branches.
     Never mutates the repo — safe to call on every UI refresh.
     """
-    ensure_repo()
+    if repo is None:
+        ensure_repo()
+        repo = settings.ROOT
+    elif not (repo / ".git").exists():
+        # A freshly created tenant root that has not been git-init'd yet has no
+        # history to show; report an empty graph rather than erroring.
+        return {"commits": [], "head": None}
     raw = _git(
         "log",
         "--all",
         f"--max-count={int(limit)}",
         f"--pretty=format:{_LOG_FMT}",
+        cwd=repo,
     )
     commits: list[dict] = []
     for line in raw.splitlines():
@@ -137,7 +150,7 @@ def history(limit: int = 200) -> dict:
             }
         )
     try:
-        head = _git("rev-parse", "HEAD").strip()
+        head = _git("rev-parse", "HEAD", cwd=repo).strip()
     except GitError:
         head = None
     return {"commits": commits, "head": head}
