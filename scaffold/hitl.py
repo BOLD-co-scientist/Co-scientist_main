@@ -41,6 +41,43 @@ def clear_stop(session_id: str) -> None:
     _stop_flag(session_id).unlink(missing_ok=True)
 
 
+def _autonomous_flag(session_id: str) -> Path:
+    return settings.session_dir(session_id) / "control" / "autonomous"
+
+
+def set_autonomous(session_id: str, enabled: bool = True) -> None:
+    """Toggle autonomous (no-human) mode for a session.
+
+    In autonomous mode every HITL gate except the ones in
+    ``_NEVER_AUTO_KINDS`` is answered immediately by the system, so a research
+    run proceeds without a human. Built for HITL-vs-autonomous benchmarking:
+    prompts and gates are identical in both modes — only who answers differs.
+    Auto-answers are logged as ``hitl.auto_answer`` with ``actor="auto"`` so
+    runs can be compared from ``events.jsonl`` alone.
+    """
+    p = _autonomous_flag(session_id)
+    if enabled:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), encoding="utf-8")
+    else:
+        p.unlink(missing_ok=True)
+
+
+def is_autonomous(session_id: str) -> bool:
+    return _autonomous_flag(session_id).exists()
+
+
+# Gates that must never be auto-answered, even in autonomous mode:
+# evolution merges keep the human as the final gate on self-modification, and
+# interrupt feedback only exists because a human pressed Stop.
+_NEVER_AUTO_KINDS = frozenset({"evolution_merge", "interrupt_feedback"})
+
+AUTONOMOUS_ANSWER_NOTE = (
+    "Autonomous mode: no human is available for this session. Decide using "
+    "your own best judgment, state the assumption you made, and continue."
+)
+
+
 def _pending(session_id: str) -> Path:
     return settings.session_dir(session_id) / "hitl" / "pending"
 
@@ -144,6 +181,20 @@ def open_request(session_id: str, kind: str, summary: str, payload: Any) -> str:
     }
     write_json(_pending(session_id) / f"{rid}.json", rec)
     eventlog.append(session_id, actor="system", kind="hitl.pending", ref=rid, summary=summary)
+
+    # Autonomous mode: answer the gate immediately so both ``ask()`` and the
+    # open_request/poll_answer waits (e.g. checkpoints) return without a human.
+    if kind not in _NEVER_AUTO_KINDS and is_autonomous(session_id):
+        decision = "answer" if kind == "ask" else "approve"
+        rec["decision"] = decision
+        rec["note"] = AUTONOMOUS_ANSWER_NOTE if kind == "ask" else ""
+        rec["decided_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        rec["auto"] = True
+        write_json(_answered(session_id) / f"{rid}.json", rec)
+        (_pending(session_id) / f"{rid}.json").unlink(missing_ok=True)
+        eventlog.append(
+            session_id, actor="auto", kind="hitl.auto_answer", ref=rid, decision=decision
+        )
     return rid
 
 

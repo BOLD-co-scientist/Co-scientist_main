@@ -162,6 +162,13 @@ def _request_stop(ctx: UserContext, sid: str) -> None:
     p.write_text(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), encoding="utf-8")
 
 
+def _set_autonomous(ctx: UserContext, sid: str) -> None:
+    """Tenant-scoped mirror of ``hitl.set_autonomous`` (see scaffold/hitl.py)."""
+    p = ctx.session_dir(sid) / "control" / "autonomous"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), encoding="utf-8")
+
+
 def _pending_dir(ctx: UserContext, sid: str) -> Path:
     return ctx.session_dir(sid) / "hitl" / "pending"
 
@@ -298,6 +305,9 @@ def clear_agent_key(ctx: UserContext = Depends(_ctx)):
 async def start_research(req: schemas.StartResearchRequest, ctx: UserContext = Depends(_ctx)):
     sid = _safe_sid(req.session_id or _new_session_id())
     _ensure_session_dirs(ctx, sid)
+    if req.autonomous:
+        _set_autonomous(ctx, sid)
+        _append_event(ctx, sid, actor="human", kind="session.autonomous")
     _append_event(ctx, sid, actor="human", kind="research.requested", task=req.task)
     _clear_stop(ctx, sid)
 

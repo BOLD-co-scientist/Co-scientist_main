@@ -8,6 +8,9 @@ from pydantic import BaseModel
 class StartResearchRequest(BaseModel):
     task: str
     session_id: str | None = None
+    # Autonomous (no-human) mode: HITL gates auto-answer so the run proceeds
+    # without a human. For HITL-vs-autonomous benchmarking; not exposed in the UI.
+    autonomous: bool = False
 
 
 class StartResearchResponse(BaseModel):
