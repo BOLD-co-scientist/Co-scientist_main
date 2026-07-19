@@ -40,6 +40,7 @@ export interface Api {
   uploadLibrary(
     file: File,
     onProgress?: (pct: number) => void,
+    relpath?: string,
   ): Promise<LibraryUploadResponse>;
   deleteLibrary(name: string): Promise<{ ok: boolean }>;
   libraryHealth(): Promise<LibraryHealth>;
@@ -270,11 +271,14 @@ export function createApi(cfg: ApiConfig): Api {
     listLibrary: () => req<LibraryFile[]>("/library/files"),
 
     // Multipart upload with progress via XHR (fetch has no upload progress) (§7.3).
-    uploadLibrary(file, onProgress) {
+    // `relpath` (the browser's webkitRelativePath) preserves folder structure
+    // when uploading a directory; omitted for a plain single-file upload.
+    uploadLibrary(file, onProgress, relpath) {
       return new Promise<LibraryUploadResponse>((resolve, reject) => {
         const token = cfg.getToken();
         const form = new FormData();
         form.append("file", file);
+        if (relpath) form.append("relpath", relpath);
         const xhr = new XMLHttpRequest();
         xhr.open("POST", url("/library/files"));
         if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
@@ -303,7 +307,12 @@ export function createApi(cfg: ApiConfig): Api {
     },
 
     deleteLibrary: (name) =>
-      req<{ ok: boolean }>(`/library/files/${encodeURIComponent(name)}`, { method: "DELETE" }),
+      // Encode each path segment but keep the "/" separators so the
+      // {name:path} route matches nested library paths.
+      req<{ ok: boolean }>(
+        `/library/files/${name.split("/").map(encodeURIComponent).join("/")}`,
+        { method: "DELETE" },
+      ),
 
     libraryHealth: async () => mapHealth(await req<Raw>("/library/health")),
 
