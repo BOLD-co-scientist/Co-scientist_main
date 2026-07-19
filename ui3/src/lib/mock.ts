@@ -2,7 +2,6 @@ import type { Api, StreamHandle } from "./api";
 import type {
   Ev,
   GitHistory,
-  Hyp,
   HitlPending,
   EvoLogEntry,
   LibraryFile,
@@ -17,33 +16,6 @@ import type {
 // POST /evolution/commands lands). Exported so the view seeds identically in
 // both mock and live modes — the hypothesis tree is a client-side artifact.
 // ============================================================
-export const SEED_HYPS: Hyp[] = [
-  { id: "n0", parent: null, dir: null, status: "root", title: "Which candidates are truly kinome-selective?", detail: "The seed question for this session. The system fanned out three competing reads of the panel data; you chose which to pursue." },
-  { id: "n1", parent: "n0", dir: "triage", status: "supported", title: "The 4 top compounds (S(10) < 0.05) are genuinely clean", detail: "Do the most selective hits hold up across the full 468-kinase panel?", evidence: "Supported \u2014 all four stay below the S(10) bar with no secondary hits." },
-  { id: "n2", parent: "n0", dir: "offtarget", status: "path", title: "CX-14 has a real MAP4K4 liability", detail: "The analyst flagged an unexpected MAP4K4 hit (Kd \u2248 38 nM) outside the annotated panel. Worth chasing down." },
-  { id: "n3", parent: "n0", dir: "triage", status: "parked", title: "Panel coverage gaps are hiding other off-targets", detail: "The 468-panel misses ~20% of the kinome \u2014 there may be liabilities we simply cannot see yet." },
-  { id: "n4", parent: "n2", dir: "offtarget", status: "refuted", title: "It is a low-occupancy binding artifact", detail: "Perhaps the MAP4K4 signal is weak and reversible rather than a true liability.", evidence: "Refuted \u2014 the dose\u2013response is clean and saturable; occupancy is high." },
-  { id: "n5", parent: "n2", dir: "offtarget", status: "path", title: "Genuine high-affinity off-target", detail: "The signal reflects real, tight binding to MAP4K4.", evidence: "Supported \u2014 docking gives \u0394G \u22129.4 kcal/mol in a well-formed pose." },
-  { id: "n6", parent: "n2", dir: "offtarget", status: "parked", title: "Assay or crystallization artifact", detail: "The hit could be an artifact of the assay format rather than biology." },
-  { id: "n7", parent: "n5", dir: "redesign", status: "proposed", title: "Redesign CX-14 to remove MAP4K4 affinity", detail: "A medicinal-chemistry route: keep on-target potency while designing out the off-target." },
-  { id: "n8", parent: "n5", dir: "profile", status: "proposed", title: "Profile the full 32-compound series vs MAP4K4", detail: "Is this a CX-14 quirk, or a scaffold-wide liability across the whole series?" },
-  { id: "n9", parent: "n5", dir: "synergy", status: "proposed", title: "Exploit MAP4K4 inhibition for therapeutic synergy", detail: "Reframe the off-target as a feature \u2014 MAP4K4 is itself a target in some indications." },
-];
-
-export const HYP_CHILDREN: Record<string, Array<{ dir: Hyp["dir"]; title: string }>> = {
-  n7: [
-    { dir: "redesign", title: "Add a bulky R3 substituent to clash with the MAP4K4 pocket" },
-    { dir: "redesign", title: "Swap the hinge-binding scaffold entirely" },
-  ],
-  n8: [
-    { dir: "profile", title: "Run the full 468-panel on all 32 compounds" },
-    { dir: "profile", title: "Focused 12-kinase counter-screen around MAP4K4" },
-  ],
-  n9: [
-    { dir: "synergy", title: "Check MAP4K4 inhibition in the disease model" },
-    { dir: "synergy", title: "Literature scan: MAP4K4 + primary-target synergy" },
-  ],
-};
 
 // Evolution capability lineage — skills the system has taught itself.
 export const EVODIR: Record<SkillDir, { color: string; label: string }> = {
@@ -168,6 +140,20 @@ const GIT: GitHistory = {
 
 const clone = <T,>(x: T): T => JSON.parse(JSON.stringify(x));
 const rid = () => Math.random().toString(16).slice(2, 14);
+
+// Canned parallel hypotheses for VITE_MOCK demo mode.
+const MOCK_HYPS = [
+  { statement: "A dormant persister subpopulation survives antibiotics via metabolic shutdown, then repopulates.", rationale: "Persisters are phenotypically (not genetically) tolerant; test by time-kill curves on stationary-phase cells." },
+  { statement: "Stochastic efflux-pump bursts in a fraction of cells transiently lower intracellular drug below lethal levels.", rationale: "Single-cell reporters would show heterogeneous pump expression correlating with survival." },
+  { statement: "Tolerance is collective and density-dependent, mediated by secreted molecules that buffer the population.", rationale: "Conditioned-media transfer and density titration would reveal a quorum-like effect." },
+  { statement: "Preexisting (p)ppGpp / stringent-response heterogeneity primes a subset for tolerance before exposure.", rationale: "relA/spoT mutants and (p)ppGpp reporters would predict which cells survive." },
+  { statement: "Toxin–antitoxin modules enforce reversible dormancy that a targeted molecule could disrupt.", rationale: "TA knockouts should collapse the tolerant fraction." },
+  { statement: "Membrane-potential dissipation lets an adjuvant re-sensitize tolerant cells to the primary drug.", rationale: "Combine a protonophore with the antibiotic and measure the tolerant fraction." },
+];
+const MOCK_HYP_STORE: Array<{
+  id: string; goal: string; created: string; selected_id: string | null; select_note?: string | null;
+  rounds: Array<{ round: number; parent_id: string | null; feedback: string | null; served_by: string; hypotheses: Array<{ id: string; statement: string; rationale: string; round: number; parent_id?: string | null }> }>;
+}> = [];
 
 export function createMockApi(): Api {
   const sessions = clone(SESSIONS);
@@ -318,5 +304,50 @@ export function createMockApi(): Api {
         ],
       }),
     gitHistory: () => delay(clone(GIT)),
+
+    // ---- hypothesis engine (mock: canned parallel sets, deterministic) ----
+    startHypothesis: (goal, n = 4) => {
+      const hyps = MOCK_HYPS.slice(0, n).map((h, i) => ({ ...h, id: `h0_${i}`, round: 0 }));
+      const rec = {
+        id: `hyp-${MOCK_HYP_STORE.length + 1}`,
+        goal,
+        created: "2026-07-20 00:00:00",
+        selected_id: null as string | null,
+        rounds: [{ round: 0, parent_id: null, feedback: null, served_by: "claude-opus-4-8 (mock)", hypotheses: hyps }],
+      };
+      MOCK_HYP_STORE.push(rec);
+      return delay(clone(rec), 700);
+    },
+    refineHypothesis: (hid, parentId, feedback, n = 4) => {
+      const rec = MOCK_HYP_STORE.find((r) => r.id === hid)!;
+      const round = rec.rounds.length;
+      const hyps = MOCK_HYPS.slice(0, n).map((h, i) => ({
+        id: `h${round}_${i}`,
+        statement: `${feedback ? "[" + feedback + "] " : ""}${h.statement}`,
+        rationale: h.rationale,
+        round,
+        parent_id: parentId,
+      }));
+      rec.rounds.push({ round, parent_id: parentId, feedback: feedback ?? null, served_by: "claude-opus-4-8 (mock)", hypotheses: hyps });
+      return delay(clone(rec), 700);
+    },
+    selectHypothesis: (hid, hypId, note) => {
+      const rec = MOCK_HYP_STORE.find((r) => r.id === hid)!;
+      rec.selected_id = hypId;
+      rec.select_note = note ?? null;
+      return delay(clone(rec));
+    },
+    getHypothesis: (hid) => delay(clone(MOCK_HYP_STORE.find((r) => r.id === hid)!)),
+    listHypothesisSessions: () =>
+      delay(
+        MOCK_HYP_STORE.map((r) => ({
+          id: r.id,
+          goal: r.goal,
+          created: r.created,
+          rounds: r.rounds.length,
+          latest_count: r.rounds[r.rounds.length - 1].hypotheses.length,
+          selected_id: r.selected_id,
+        })),
+      ),
   };
 }

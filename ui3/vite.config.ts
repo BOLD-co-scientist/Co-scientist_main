@@ -21,6 +21,7 @@ const API_PREFIXES = [
   "/git",
   "/health",
   "/evolution",
+  "/hypothesis",
 ];
 
 export default defineConfig({

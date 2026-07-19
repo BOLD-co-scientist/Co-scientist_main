@@ -5,6 +5,8 @@ import type {
   GitHistory,
   HitlDecision,
   HitlPending,
+  HypSession,
+  HypSummary,
   LibraryFile,
   LibraryHealth,
   LibraryUploadResponse,
@@ -58,6 +60,12 @@ export interface Api {
     sid?: string,
   ): Promise<MemorySearchResult>;
   gitHistory(limit?: number): Promise<GitHistory>;
+  // ---- hypothesis engine (parallel-set flow) ----
+  startHypothesis(goal: string, n?: number): Promise<HypSession>;
+  refineHypothesis(hid: string, parentId: string, feedback?: string, n?: number): Promise<HypSession>;
+  selectHypothesis(hid: string, hypId: string, note?: string): Promise<HypSession>;
+  getHypothesis(hid: string): Promise<HypSession>;
+  listHypothesisSessions(): Promise<HypSummary[]>;
 }
 
 export interface ApiConfig {
@@ -330,5 +338,24 @@ export function createApi(cfg: ApiConfig): Api {
 
     // Public endpoint — no auth (§5).
     gitHistory: async (limit = 200) => mapGit(await req<Raw>(`/git/history?limit=${limit}`)),
+
+    // ---- hypothesis engine ---- (generation can take 10-30s; no special timeout needed)
+    startHypothesis: (goal, n) =>
+      req<HypSession>("/hypothesis/sessions", {
+        method: "POST",
+        body: JSON.stringify({ goal, config: n ? { n_initial: n } : undefined }),
+      }),
+    refineHypothesis: (hid, parentId, feedback, n) =>
+      req<HypSession>(`/hypothesis/${encodeURIComponent(hid)}/refine`, {
+        method: "POST",
+        body: JSON.stringify({ parent_id: parentId, feedback, n }),
+      }),
+    selectHypothesis: (hid, hypId, note) =>
+      req<HypSession>(`/hypothesis/${encodeURIComponent(hid)}/select`, {
+        method: "POST",
+        body: JSON.stringify({ hypothesis_id: hypId, note }),
+      }),
+    getHypothesis: (hid) => req<HypSession>(`/hypothesis/${encodeURIComponent(hid)}`),
+    listHypothesisSessions: () => req<HypSummary[]>("/hypothesis/sessions"),
   };
 }

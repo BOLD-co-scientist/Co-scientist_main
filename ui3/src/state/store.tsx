@@ -33,6 +33,7 @@ type Theme = "dark" | "light";
 
 interface AppCtx {
   mock: boolean;
+  api: Api;
   theme: Theme;
   toggleTheme: () => void;
 
@@ -474,6 +475,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const value: AppCtx = {
     mock: USE_MOCK,
+    api,
     theme,
     toggleTheme,
     authed,
