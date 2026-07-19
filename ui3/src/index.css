@@ -1,0 +1,150 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================================
+   Design tokens — the single source of truth for both themes.
+   Lifted verbatim from the approved design (CoScientist.dc.html).
+   Flip the theme by setting data-theme="light" on <html>.
+   ============================================================ */
+:root,
+[data-theme="dark"] {
+  --bg0: #0b0e12;
+  --bg1: #12161c;
+  --bg2: #171d24;
+  --bg3: #1e252e;
+  --border: #252d37;
+  --border-hi: #333d49;
+  --hi: #e9ecef;
+  --mid: #98a3af;
+  --lo: #68717c;
+  --accent: #5b9dd9;
+  --accent-dim: #294a66;
+  --accent-soft: #12222f;
+  --ok: #57b98a;
+  --ok-soft: #12241b;
+  --warn: #d6a24a;
+  --warn-soft: #241d10;
+  --err: #e0665f;
+  --err-soft: #271413;
+  --evo: #a78bd0;
+  --evo-soft: #1d1726;
+  --cyan: #68b6cf;
+  --lav: #b79cd8;
+  --grn: #6cbf90;
+  --ui: "Hanken Grotesk", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, monospace;
+  --shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
+}
+
+[data-theme="light"] {
+  --bg0: #eceee9;
+  --bg1: #ffffff;
+  --bg2: #f6f7f4;
+  --bg3: #eef0eb;
+  --border: #e3e6e0;
+  --border-hi: #d2d6ce;
+  --hi: #181c20;
+  --mid: #586069;
+  --lo: #8a929b;
+  --accent: #2f6ea8;
+  --accent-dim: #b3cee4;
+  --accent-soft: #e8f1f8;
+  --ok: #2e935f;
+  --ok-soft: #e6f3ec;
+  --warn: #a9782a;
+  --warn-soft: #f6efdf;
+  --err: #c74c47;
+  --err-soft: #f7e8e6;
+  --evo: #7a5cbd;
+  --evo-soft: #efeafa;
+  --cyan: #2d7f9c;
+  --lav: #7a5cbd;
+  --grn: #2e935f;
+  --shadow: 0 8px 30px rgba(30, 40, 55, 0.12);
+}
+
+* {
+  box-sizing: border-box;
+}
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+body {
+  background: var(--bg0);
+  color: var(--hi);
+  font-family: var(--ui);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+button {
+  font-family: inherit;
+  cursor: pointer;
+  border: none;
+  background: none;
+  color: inherit;
+}
+textarea,
+input {
+  font-family: inherit;
+}
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
+}
+::selection {
+  background: var(--accent-dim);
+  color: var(--hi);
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--border-hi);
+  border-radius: 6px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+@keyframes ring {
+  0% {
+    box-shadow: 0 0 0 0 var(--accent-dim);
+  }
+  70% {
+    box-shadow: 0 0 0 6px transparent;
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+@keyframes fade {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}

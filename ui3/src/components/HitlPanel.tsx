@@ -1,0 +1,79 @@
+import { useState } from "react";
+import { useApp } from "../state/store";
+
+export default function HitlPanel() {
+  const { pending, answer } = useApp();
+  const [note, setNote] = useState("");
+
+  if (pending.length === 0) {
+    return (
+      <div style={{ padding: "40px 16px", textAlign: "center", color: "var(--lo)" }}>
+        <div style={{ width: 38, height: 38, borderRadius: "50%", border: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 12px", fontSize: 16, color: "var(--ok)" }}>
+          {"\u2713"}
+        </div>
+        <div style={{ fontSize: 13, color: "var(--mid)" }}>No approvals pending.</div>
+        <div style={{ marginTop: 4, fontSize: 11.5 }}>You'll be alerted here when the agent needs a decision.</div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ padding: "16px 16px 20px" }}>
+      {pending.map((p) => (
+        <div key={p.request_id} style={{ border: "1px solid var(--warn)", borderRadius: 12, overflow: "hidden", animation: "ring 2s 1", marginBottom: 12 }}>
+          <div style={{ padding: "11px 14px", background: "var(--warn-soft)", borderBottom: "1px solid var(--warn)" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--warn)", animation: "pulse 1.6s infinite" }} />
+              <span style={{ fontSize: 11, fontWeight: 700, color: "var(--warn)", textTransform: "uppercase", letterSpacing: ".07em" }}>Approval required</span>
+            </div>
+            <div style={{ marginTop: 8, fontSize: 14, fontWeight: 600, color: "var(--hi)" }}>{p.title}</div>
+          </div>
+          <div style={{ padding: "13px 14px" }}>
+            {p.action && (
+              <>
+                <div style={{ fontSize: 11, fontWeight: 600, color: "var(--lo)", textTransform: "uppercase", letterSpacing: ".06em" }}>What will happen</div>
+                <div style={{ marginTop: 5, fontSize: 13, color: "var(--hi)", lineHeight: 1.5 }}>{p.action}</div>
+              </>
+            )}
+            {p.detail && (
+              <div style={{ marginTop: 11, padding: "9px 11px", background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 8, fontFamily: "var(--mono)", fontSize: 11.5, color: "var(--mid)", lineHeight: 1.6, whiteSpace: "pre-wrap" }}>
+                {p.detail}
+              </div>
+            )}
+            <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 7 }}>
+              <span style={{ fontFamily: "var(--mono)", fontSize: 10, color: "var(--lo)" }}>requested by</span>
+              <span style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--cyan)" }}>{p.requester}</span>
+              <span style={{ fontFamily: "var(--mono)", fontSize: 10, color: "var(--lo)" }}>&#183; {p.request_id}</span>
+            </div>
+            <input
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder="Optional note…"
+              style={{ width: "100%", marginTop: 11, padding: "9px 11px", background: "var(--bg0)", border: "1px solid var(--border)", borderRadius: 8, color: "var(--hi)", fontSize: 12.5, outline: "none" }}
+            />
+            <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+              <button
+                onClick={() => {
+                  void answer(p.request_id, "approve", note);
+                  setNote("");
+                }}
+                style={{ flex: 1, padding: 10, background: "var(--ok)", color: "#04160c", fontWeight: 700, borderRadius: 9, fontSize: 13 }}
+              >
+                Approve
+              </button>
+              <button
+                onClick={() => {
+                  void answer(p.request_id, "reject", note);
+                  setNote("");
+                }}
+                style={{ flex: 1, padding: 10, background: "var(--err-soft)", border: "1px solid var(--err)", color: "var(--err)", fontWeight: 700, borderRadius: 9, fontSize: 13 }}
+              >
+                Reject
+              </button>
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
