@@ -96,6 +96,23 @@ def _build_options(
         session_id, SUPERVISOR_AGENT_ID, sup.tools
     )
 
+    # Register every MCP server any subagent declares. The SDK only wires servers
+    # passed at the top level of ClaudeAgentOptions; AgentDefinition.tools merely
+    # *filters* those servers per role — it cannot add one. So a subagent-only
+    # tool (e.g. py_exec, longjob, ocr) whose server the supervisor doesn't also
+    # declare would be absent from the subagent's manifest at runtime ("tool not
+    # available"). Union the servers here; per-role gating still happens via each
+    # AgentDefinition.tools list built in spawn.build_agent_definitions.
+    for _role in subs:
+        sub_servers, sub_allowed = tools_registry.build_tools(
+            session_id, SUPERVISOR_AGENT_ID, _role.tools
+        )
+        for _name, _server in sub_servers.items():
+            mcp_servers.setdefault(_name, _server)
+        for _tool in sub_allowed:
+            if _tool not in allowed:
+                allowed.append(_tool)
+
     # R7: let the supervisor crystallize a reusable workflow into a skill
     # (HITL-gated). Always available to the supervisor, independent of role YAML.
     mcp_servers["propose_skill"] = skills.make_propose_skill_server(
