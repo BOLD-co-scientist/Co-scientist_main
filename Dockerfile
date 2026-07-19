@@ -11,8 +11,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         nodejs \
         npm \
-        tesseract-ocr \
-        poppler-utils \
+        libgl1 \
+        libglib2.0-0 \
+        libgomp1 \
         texlive-latex-recommended \
         texlive-latex-extra \
         texlive-fonts-recommended \
@@ -29,23 +30,27 @@ RUN groupadd -o -g ${GID:-1000} myuser && \
 
 WORKDIR /app
 
-# Ensure the new user owns the working directory
-RUN chown -R myuser:myuser /app
-
-# Switch to the new non-root user
-USER myuser
-
-# Add the local user bin to PATH so pip-installed binaries (like uvicorn) are recognized
-ENV PATH="/home/myuser/.local/bin:${PATH}"
-
 # --- APP SETUP ---
-# Copy files and ensure ownership belongs to 'myuser'
-COPY --chown=myuser:myuser pyproject.toml /app/pyproject.toml
-COPY --chown=myuser:myuser . /app
+# Copy the source in first (as root) so the editable install can resolve it.
+COPY pyproject.toml /app/pyproject.toml
+COPY . /app
 
-# Install Python dependencies as the non-root user. Keep the [dev] extras so
-# pytest ships in the image — the strict-path evolution smoke gate runs it.
-RUN pip install -e ".[science,dev]"
+# Install Python dependencies into the SYSTEM site-packages (/usr/local), as
+# root, BEFORE dropping to the non-root user. This is CRITICAL and non-obvious:
+# MCP tools run in contexts that do NOT see the per-user site
+# (/home/myuser/.local). py_exec spawns the system python with HOME overridden,
+# and the research runtime executes tools in a uid-remapped sandbox that never
+# mounts the user site — so a user-site install makes pandas/numpy/rapidocr/etc.
+# silently unimportable at tool-call time (verified live). The system site is on
+# sys.path unconditionally and is readable in both contexts, so the deps must
+# live there. Build-time root is fine; the RUNNING container is still non-root
+# (USER myuser below) per BOLD/FLAIR Rule 1. Keep [dev] so pytest ships for the
+# strict-path evolution smoke gate.
+RUN pip install --root-user-action=ignore -e ".[science,dev,ocr]"
+
+# Hand the working tree to the non-root user and switch to it for runtime.
+RUN chown -R myuser:myuser /app
+USER myuser
 
 ENV PYTHONPATH=/app
 EXPOSE 8765

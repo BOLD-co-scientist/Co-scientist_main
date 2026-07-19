@@ -74,6 +74,15 @@ OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "")  # optional (Azure/proxy
 DEEPRESEARCH_MODEL = os.environ.get(
     "COSCIENTIST_DEEPRESEARCH_MODEL", "o4-mini-deep-research"
 )
+# The genuine deep-research models require OpenAI *organization verification*.
+# Until the org is verified they fail mid-run ("organization must be verified").
+# When that happens we retry once with this web-search-grounded fallback model
+# (available without verification) so a run still produces a cited report — then
+# the report is labeled as fallback output. Set empty to disable and hard-fail
+# instead. Once the org is verified, the primary model succeeds and this is moot.
+DEEPRESEARCH_FALLBACK_MODEL = os.environ.get(
+    "COSCIENTIST_DEEPRESEARCH_FALLBACK_MODEL", "o4-mini"
+)
 # How long the blocking `run` call polls before degrading to a background handle.
 DEEPRESEARCH_MAX_WAIT_S = int(os.environ.get("COSCIENTIST_DEEPRESEARCH_MAX_WAIT_S", "1200"))
 DEEPRESEARCH_POLL_S = int(os.environ.get("COSCIENTIST_DEEPRESEARCH_POLL_S", "10"))

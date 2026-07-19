@@ -49,6 +49,10 @@ def build_tools(session_id: str, agent_id: str, declared: Iterable[str]) -> tupl
             mod = _import("tools.py_exec.server")
             servers["py_exec"] = mod.make_server(session_id)
             allowed.append("mcp__py_exec")
+        elif name == "deep_research":
+            mod = _import("tools.deep_research.server")
+            servers["deep_research"] = mod.make_server(session_id)
+            allowed.append("mcp__deep_research")
         else:
             # Unknown tool name. Try a generic loader: tools/<name>/server.py:make_server.
             try:

@@ -51,12 +51,14 @@ def test_tool_servers_construct(tmp_path, monkeypatch):
     from tools.fs_read import server as fs_read
     from tools.fs_write_workspace import server as fs_write
     from tools.py_exec import server as py_exec
+    from tools.ocr import server as ocr
 
     sid = "smoke-test-session"
     s.ensure_session_dirs(sid)
     assert fs_read.make_server(sid) is not None
     assert fs_write.make_server(sid) is not None
     assert py_exec.make_server(sid) is not None
+    assert ocr.make_server(sid) is not None
 
 
 def test_role_loader(monkeypatch):
@@ -144,3 +146,89 @@ def test_sandbox_path_guard(tmp_path, monkeypatch):
     assert sandbox.in_worktree(wt, inside)
     assert not sandbox.in_worktree(wt, outside)
     sandbox.discard(wt)
+
+
+def test_ocr_wires_via_generic_loader(tmp_path, monkeypatch):
+    """The registry has no hard-coded `ocr` branch — it must resolve through the
+    generic tools/<name>/server.py fallback in build_tools()."""
+    monkeypatch.setenv("COSCIENTIST_ROOT", str(tmp_path))
+    import importlib
+    from scaffold import settings as s
+    importlib.reload(s)
+    from scaffold import tools_registry
+    importlib.reload(tools_registry)
+    s.ensure_session_dirs("ocr-wire")
+    servers, allowed = tools_registry.build_tools("ocr-wire", "data_analyst", ["ocr"])
+    assert "ocr" in servers
+    assert "mcp__ocr" in allowed
+
+
+def test_ocr_path_guard_rejects_outside_roots(tmp_path, monkeypatch):
+    monkeypatch.setenv("COSCIENTIST_ROOT", str(tmp_path))
+    import importlib
+    from scaffold import settings as s
+    importlib.reload(s)
+    from tools.ocr import server as ocr
+    importlib.reload(ocr)
+    s.ensure_session_dirs("ocr-guard")
+    with pytest.raises(PermissionError):
+        ocr._resolve_safe("ocr-guard", "/etc/passwd")
+
+
+def test_build_options_registers_subagent_servers(monkeypatch):
+    """Regression: subagent-only MCP servers (py_exec, longjob, ocr) must be
+    registered at the top level of ClaudeAgentOptions. The SDK only wires servers
+    passed there; AgentDefinition.tools merely *filters* them, so a server no
+    subagent-union registers is absent from every subagent's manifest at runtime
+    (the 'tool not in my manifest' bug). See research/runtime.py:_build_options."""
+    monkeypatch.setenv("COSCIENTIST_ROOT", str(ROOT))
+    import importlib
+    from scaffold import settings as s
+    importlib.reload(s)
+    from research import runtime
+    importlib.reload(runtime)
+    s.ensure_session_dirs("opts-probe")
+    opts = runtime._build_options("opts-probe", "task", {})
+    servers = set(opts.mcp_servers or {})
+    allowed = set(opts.allowed_tools or [])
+    for name in ("py_exec", "longjob", "ocr"):
+        assert name in servers, f"{name} server not registered (subagent tools broken)"
+        assert f"mcp__{name}" in allowed, f"mcp__{name} not in allowed_tools"
+
+
+@pytest.mark.skipif(
+    __import__("importlib.util", fromlist=["util"]).find_spec("rapidocr_onnxruntime") is None,
+    reason="rapidocr-onnxruntime not installed on host (present in the built image)",
+)
+def test_ocr_extract_image_roundtrip(tmp_path, monkeypatch):
+    """End-to-end: render text to a PNG, OCR it with the RapidOCR engine, assert
+    the text comes back. Skipped where the ocr extra isn't installed; runs inside
+    the built image."""
+    monkeypatch.setenv("COSCIENTIST_ROOT", str(tmp_path))
+    import asyncio
+    import importlib
+    from scaffold import settings as s
+    importlib.reload(s)
+    from tools.ocr import server as ocr
+    importlib.reload(ocr)
+
+    if importlib.util.find_spec("PIL") is None:
+        pytest.skip("Pillow not available to generate the fixture")
+
+    sid = "ocr-run"
+    s.ensure_session_dirs(sid)
+    img = s.session_dir(sid) / "scratch" / "hello.png"
+    img.parent.mkdir(parents=True, exist_ok=True)
+    from PIL import Image, ImageDraw, ImageFont  # type: ignore
+    im = Image.new("RGB", (600, 160), "white")
+    try:
+        font = ImageFont.truetype("DejaVuSans-Bold.ttf", 64)
+    except Exception:
+        font = ImageFont.load_default()
+    ImageDraw.Draw(im).text((20, 40), "HELLO OCR", fill="black", font=font)
+    im.save(img)
+
+    tool = ocr.make_tools(sid)[0]
+    res = asyncio.run(tool.handler({"path": str(img)}))
+    text = res["content"][0]["text"].upper()
+    assert "HELLO" in text or "OCR" in text
