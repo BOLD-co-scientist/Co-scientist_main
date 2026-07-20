@@ -318,5 +318,18 @@ export function createMockApi(): Api {
         ],
       }),
     gitHistory: () => delay(clone(GIT)),
+    getCommit: (sha) =>
+      delay({
+        sha,
+        subject: (GIT.commits.find((c) => c.sha === sha)?.subject) ?? "commit",
+        author: "coscientist-evolution",
+        ts: 1784498000,
+        parents: [],
+        files: [
+          { path: "tools/example/server.py", additions: 42, deletions: 6 },
+          { path: "roles/subagents/example.yaml", additions: 11, deletions: 0 },
+        ],
+      }),
+    spawnEvolution: (command) => delay({ session_id: "evo-mock-1", command }),
   };
 }

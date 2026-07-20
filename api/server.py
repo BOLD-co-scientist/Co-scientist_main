@@ -779,3 +779,59 @@ def git_history(limit: int = 200, ctx: UserContext = Depends(_ctx)):
         return sandbox.history(limit=limit, repo=ctx.root)
     except sandbox.GitError as e:
         raise HTTPException(500, f"git history failed: {e}")
+
+
+@app.get("/git/commit/{sha}")
+def git_commit(sha: str, ctx: UserContext = Depends(_ctx)):
+    """What's *in* a commit of the researcher's own harness repo — metadata plus
+    the files it changed. Powers the clickable node detail in the evolution
+    graph. Read-only, tenant-scoped."""
+    if not re.fullmatch(r"[0-9a-fA-F]{4,40}", sha or ""):
+        raise HTTPException(400, f"invalid commit sha: {sha!r}")
+    try:
+        return sandbox.commit_detail(sha, repo=ctx.root)
+    except sandbox.GitError as e:
+        raise HTTPException(404, f"commit not found: {e}")
+
+
+# ---------- evolution (spawn a self-modification from a chosen parent) ----------
+
+
+async def _spawn_evolution(ctx: UserContext, sid: str, command: str, base: str | None) -> None:
+    """Spawn the evolution runtime as a fresh subprocess. Mirrors
+    ``_spawn_research``: the runtime creates an ``evo/*`` worktree off ``base``
+    (a commit the human picked in the graph, or HEAD), runs the SDK evolution
+    agent, and proposes a merge through the same HITL gate. stdout+stderr → the
+    session runtime.log."""
+    log_fh = open(ctx.session_dir(sid) / "runtime.log", "ab")
+    argv = [sys.executable, "-m", "evolution.runtime", "--session", sid, "--command", command]
+    if base:
+        argv += ["--base", base]
+    proc = await asyncio.create_subprocess_exec(
+        *argv, cwd=str(ctx.root), env=_runtime_env(ctx), stdout=log_fh, stderr=log_fh
+    )
+    _RUNNING[_monitor_key(ctx, sid)] = proc
+    asyncio.create_task(_monitor_runtime(ctx, sid, proc, log_fh))
+
+
+@app.post("/evolution/commands", response_model=schemas.StartEvolutionResponse)
+async def start_evolution(req: schemas.StartEvolutionRequest, ctx: UserContext = Depends(_ctx)):
+    """Spawn a self-modification: the evolution agent branches an ``evo/*``
+    worktree from ``req.base`` (a commit sha the human picked in the graph, or
+    HEAD if omitted), attempts the change described by ``req.command``, and
+    proposes a merge for human approval. Its ``evolution.*`` lifecycle streams
+    into the returned session and the merge lands in the lineage graph."""
+    command = (req.command or "").strip()
+    if not command:
+        raise HTTPException(400, "command must not be empty")
+    base = getattr(req, "base", None)
+    if base and not re.fullmatch(r"[0-9a-fA-F]{4,40}", base):
+        raise HTTPException(400, f"invalid base sha: {base!r}")
+    sid = _safe_sid(req.session_id or ("evo-" + _new_session_id()))
+    _ensure_session_dirs(ctx, sid)
+    if _monitor_key(ctx, sid) in _RUNNING:
+        raise HTTPException(409, "an evolution is already running for this session")
+    _append_event(ctx, sid, actor="human", kind="evolution.requested", command=command, base=base or "HEAD")
+    _clear_stop(ctx, sid)
+    await _spawn_evolution(ctx, sid, command, base)
+    return schemas.StartEvolutionResponse(session_id=sid, command=command)

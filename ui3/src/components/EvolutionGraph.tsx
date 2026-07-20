@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties } from "react";
 import { useApp } from "../state/store";
-import type { GitCommit } from "../lib/types";
+import type { CommitDetail, GitCommit } from "../lib/types";
 
 // Real evolution lineage, rendered from the researcher's OWN harness repo
 // (GET /git/history, tenant-scoped). Each commit is a node; parent→child edges
@@ -213,6 +213,37 @@ function refChip(kind: string): CSSProperties {
 }
 
 function CommitInspector({ c, isEvo, isMain }: { c: GitCommit; isEvo: boolean; isMain: boolean }) {
+  const { api, refreshSessions, select, setMainView } = useApp();
+  const [detail, setDetail] = useState<CommitDetail | null>(null);
+  const [prompt, setPrompt] = useState("");
+  const [spawning, setSpawning] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+
+  // "what is in there" — fetch the commit's changed files on select.
+  useEffect(() => {
+    let cancelled = false;
+    setDetail(null);
+    api.getCommit(c.sha).then((d) => !cancelled && setDetail(d)).catch(() => {});
+    return () => { cancelled = true; };
+  }, [c.sha, api]);
+
+  const spawn = async () => {
+    const cmd = prompt.trim();
+    if (!cmd) return;
+    setSpawning(true);
+    setNote(null);
+    try {
+      const { session_id } = await api.spawnEvolution(cmd, c.sha);
+      await refreshSessions();
+      select(session_id); // switch to the new evolution session to watch it
+      setMainView("session");
+    } catch {
+      setNote("Could not start the evolution. Try again.");
+    } finally {
+      setSpawning(false);
+    }
+  };
+
   const [tag, tagColor] = isEvo
     ? ["In-flight evolution branch", "var(--evo)"]
     : isMain
@@ -240,6 +271,51 @@ function CommitInspector({ c, isEvo, isMain }: { c: GitCommit; isEvo: boolean; i
           </div>
         </div>
       )}
+
+      {/* what's in this commit */}
+      <div style={{ marginTop: 16 }}>
+        <div style={{ fontSize: 10.5, fontWeight: 600, color: "var(--lo)", textTransform: "uppercase", letterSpacing: ".07em" }}>
+          Files changed{detail ? ` (${detail.files.length})` : ""}
+        </div>
+        {!detail && <div style={{ marginTop: 5, fontSize: 12, color: "var(--lo)" }}>loading…</div>}
+        {detail && detail.files.length === 0 && <div style={{ marginTop: 5, fontSize: 12, color: "var(--lo)" }}>No file changes (e.g. a merge or bootstrap).</div>}
+        {detail && detail.files.map((f) => (
+          <div key={f.path} style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 5, fontSize: 11.5 }}>
+            <span style={{ fontFamily: "var(--mono)", flex: 1, minWidth: 0, color: "var(--hi)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={f.path}>{f.path}</span>
+            {f.binary ? (
+              <span style={{ fontFamily: "var(--mono)", color: "var(--lo)" }}>bin</span>
+            ) : (
+              <span style={{ fontFamily: "var(--mono)", flex: "0 0 auto" }}>
+                <span style={{ color: "var(--ok)" }}>+{f.additions}</span> <span style={{ color: "var(--err)" }}>-{f.deletions}</span>
+              </span>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {/* spawn a feature from this node */}
+      <div style={{ marginTop: 18, paddingTop: 16, borderTop: "1px solid var(--border)" }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: "var(--evo)" }}>Spawn a feature from this node</div>
+        <div style={{ marginTop: 4, fontSize: 11.5, color: "var(--mid)", lineHeight: 1.45 }}>
+          The evolution agent branches a new <span style={{ fontFamily: "var(--mono)" }}>evo/*</span> worktree from this commit, attempts your change, and proposes a merge for your approval.
+        </div>
+        <textarea
+          value={prompt}
+          onChange={(e) => setPrompt(e.target.value)}
+          placeholder='e.g. "Add a plotting helper tool for the data_analyst"'
+          rows={3}
+          disabled={spawning}
+          style={{ width: "100%", marginTop: 9, resize: "vertical", padding: "9px 11px", background: "var(--bg0)", border: "1px solid var(--border)", borderRadius: 9, color: "var(--hi)", fontSize: 12.5, outline: "none", lineHeight: 1.5 }}
+        />
+        <button
+          onClick={spawn}
+          disabled={!prompt.trim() || spawning}
+          style={{ width: "100%", marginTop: 9, padding: 10, borderRadius: 9, fontWeight: 700, fontSize: 13, background: prompt.trim() && !spawning ? "var(--evo)" : "var(--bg2)", color: prompt.trim() && !spawning ? "#14091f" : "var(--lo)" }}
+        >
+          {spawning ? "Starting evolution…" : "Start evolution →"}
+        </button>
+        {note && <div style={{ marginTop: 7, fontSize: 11.5, color: "var(--err)" }}>{note}</div>}
+      </div>
     </div>
   );
 }

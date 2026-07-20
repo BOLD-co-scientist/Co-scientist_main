@@ -69,10 +69,10 @@ def _build_options(
     )
 
 
-async def run_command(session_id: str, command: str) -> None:
+async def run_command(session_id: str, command: str, base: str | None = None) -> None:
     settings.ensure_session_dirs(session_id)
     sandbox.ensure_repo()
-    wt = sandbox.create(_slugify(command))
+    wt = sandbox.create(_slugify(command), base=base)
     eventlog.append(
         session_id,
         actor=EVOLUTION_AGENT_ID,
@@ -117,8 +117,9 @@ def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--session", required=True)
     p.add_argument("--command", required=True)
+    p.add_argument("--base", default=None, help="commit sha/ref to branch the worktree from")
     args = p.parse_args()
-    asyncio.run(run_command(args.session, args.command))
+    asyncio.run(run_command(args.session, args.command, base=args.base))
 
 
 if __name__ == "__main__":

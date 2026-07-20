@@ -49,6 +49,8 @@ class HumanDirective(BaseModel):
 class StartEvolutionRequest(BaseModel):
     command: str
     session_id: str | None = None
+    # Commit sha the human picked in the evolution graph to branch from; HEAD if omitted.
+    base: str | None = None
 
 
 class StartEvolutionResponse(BaseModel):
