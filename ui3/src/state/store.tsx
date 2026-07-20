@@ -351,6 +351,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // ---- actions ----
   const select = useCallback((sid: string) => {
     setMainView("session");
+    // Selecting a real session exits draft mode — otherwise send() would still
+    // take the draft branch and spawn a *new* session instead of replying here.
+    setDraftNew(false);
     // Only clear the timeline when actually switching sessions. Re-selecting the
     // active session must not wipe events, since the backfill effect is keyed on
     // activeId changing and would not re-run to repopulate them.
