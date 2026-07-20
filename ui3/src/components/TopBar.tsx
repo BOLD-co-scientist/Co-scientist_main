@@ -18,7 +18,7 @@ export default function TopBar() {
     >
       <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
         <div style={{ width: 19, height: 19, borderRadius: 5, background: "var(--accent)", boxShadow: "0 0 14px var(--accent-dim)" }} />
-        <div style={{ fontSize: 15, fontWeight: 600, letterSpacing: "-.01em" }}>coscientist</div>
+        <div style={{ fontSize: 15, fontWeight: 600, letterSpacing: "-.01em" }}>BOLD Co-scientist</div>
       </div>
       <div style={{ width: 1, height: 20, background: "var(--border)" }} />
       <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>

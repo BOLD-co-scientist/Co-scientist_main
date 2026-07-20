@@ -18,7 +18,7 @@ export default function LoginGate() {
       <div style={{ width: 380, padding: "40px 36px 34px" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 11, marginBottom: 30 }}>
           <div style={{ width: 26, height: 26, borderRadius: 7, background: "var(--accent)", boxShadow: "0 0 22px var(--accent-dim)" }} />
-          <div style={{ fontSize: 19, fontWeight: 600, letterSpacing: "-.01em" }}>coscientist</div>
+          <div style={{ fontSize: 19, fontWeight: 600, letterSpacing: "-.01em" }}>BOLD Co-scientist</div>
         </div>
         <div style={{ fontSize: 13, color: "var(--mid)", marginBottom: 22 }}>
           A workbench for AI&#8209;assisted science. Enter your API key to continue.
