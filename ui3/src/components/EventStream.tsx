@@ -26,6 +26,23 @@ export default function EventStream() {
 
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
+      {/* working-hypothesis bar — pinned at the very top; passed to the agent as
+          context and persists here until cleared */}
+      {workingHyp && (
+        <div style={{ padding: "10px 24px", background: "var(--accent-soft)", borderBottom: "1px solid var(--accent-dim)", display: "flex", alignItems: "center", gap: 11, animation: "fade .3s ease" }}>
+          <span style={{ fontFamily: "var(--mono)", fontSize: 9.5, fontWeight: 700, color: "var(--accent)", textTransform: "uppercase", letterSpacing: ".06em", flex: "0 0 auto" }}>Working hypothesis</span>
+          <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: "var(--hi)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={workingHyp.statement}>
+            {workingHyp.statement}
+          </span>
+          <button onClick={() => setMainView("hypothesis")} style={{ fontSize: 11.5, fontWeight: 600, color: "var(--accent)", fontFamily: "var(--mono)", flex: "0 0 auto" }}>
+            view
+          </button>
+          <button onClick={clearWorkingHyp} title="Stop focusing on this hypothesis" style={{ fontSize: 12, color: "var(--lo)", flex: "0 0 auto" }}>
+            {"✕"}
+          </button>
+        </div>
+      )}
+
       {/* session header */}
       <div style={{ padding: "15px 24px 13px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "flex-start", gap: 14 }}>
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -44,23 +61,6 @@ export default function EventStream() {
           </button>
         )}
       </div>
-
-      {/* working-hypothesis bar — the hypothesis being investigated is passed to
-          the agent as context and persists here until cleared */}
-      {workingHyp && (
-        <div style={{ margin: "12px 24px 0", padding: "10px 14px", background: "var(--accent-soft)", border: "1px solid var(--accent-dim)", borderRadius: 10, display: "flex", alignItems: "center", gap: 11, animation: "fade .3s ease" }}>
-          <span style={{ fontFamily: "var(--mono)", fontSize: 9.5, fontWeight: 700, color: "var(--accent)", textTransform: "uppercase", letterSpacing: ".06em", flex: "0 0 auto" }}>Working hypothesis</span>
-          <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: "var(--hi)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={workingHyp.statement}>
-            {workingHyp.statement}
-          </span>
-          <button onClick={() => setMainView("hypothesis")} style={{ fontSize: 11.5, fontWeight: 600, color: "var(--accent)", fontFamily: "var(--mono)", flex: "0 0 auto" }}>
-            view
-          </button>
-          <button onClick={clearWorkingHyp} title="Stop focusing on this hypothesis" style={{ fontSize: 12, color: "var(--lo)", flex: "0 0 auto" }}>
-            {"✕"}
-          </button>
-        </div>
-      )}
 
       {/* pinned HITL banner */}
       {hasPending && (

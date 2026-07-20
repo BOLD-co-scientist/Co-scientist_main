@@ -164,7 +164,27 @@ export function toVM(e: Ev, prev?: Ev): EventVM {
     };
   }
 
-  if (e.kind === "bus.send")
+  if (e.kind === "bus.send") {
+    // The text is nested under `payload.text` (the bus wraps the message).
+    const payload = (e as Record<string, unknown>).payload;
+    const payloadText =
+      payload && typeof payload === "object" ? (payload as Record<string, unknown>).text : undefined;
+    const busBody = (typeof payloadText === "string" && payloadText.trim() ? payloadText : firstStr("text")) ?? "";
+    // A message addressed to the human IS the supervisor's reply — render it as a
+    // full response bubble so it's actually readable, not a truncated one-liner.
+    if (s("target") === "human") {
+      return {
+        variant: "bubble",
+        id: e.id,
+        time,
+        showActor,
+        actorColor: actorColor(e.actor),
+        actorLabel: actorLabel(e.actor),
+        glyph: actorGlyph(e.actor),
+        tone: "agent",
+        body: busBody,
+      };
+    }
     return {
       variant: "dispatch",
       id: e.id,
@@ -172,8 +192,9 @@ export function toVM(e: Ev, prev?: Ev): EventVM {
       actorColor: actorColor(e.actor),
       actorLabel: actorLabel(e.actor),
       target: s("target") ?? "subagent",
-      body: firstStr("text", "msg_kind") ?? "",
+      body: busBody || (s("msg_kind") ?? ""),
     };
+  }
 
   if (e.kind === "hitl.pending" || e.kind === "ask")
     return {
