@@ -888,3 +888,139 @@ async def start_evolution(req: schemas.StartEvolutionRequest, ctx: UserContext =
     _clear_stop(ctx, sid)
     await _spawn_evolution(ctx, sid, command, base)
     return schemas.StartEvolutionResponse(session_id=sid, command=command)
+# ---------- hypothesis engine (interim: parallel-set generation via Fable) ----------
+#
+# The human enters a goal, gets a few PARALLEL hypotheses, and either selects one
+# or refines from one (spawning a fresh parallel set). No tree, no tournament.
+# TODO(H1): replace with the Google AI co-scientist protocol — contract + plan in
+# docs/plans/H1-hypothesis-coscientist.md. This is the placeholder backend.
+
+from . import hypothesis as _hypothesis  # noqa: E402  (kept local to this section)
+
+
+def _hyp_dir(ctx: UserContext) -> Path:
+    d = ctx.state / "hypotheses"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _hyp_path(ctx: UserContext, hid: str) -> Path:
+    return _hyp_dir(ctx) / f"{_safe_sid(hid)}.json"
+
+
+def _new_hyp_id(hyps: list[dict], round_no: int) -> None:
+    for i, h in enumerate(hyps):
+        h["id"] = f"h{round_no}_{i}_{uuid.uuid4().hex[:6]}"
+        h["round"] = round_no
+
+
+def _hyp_summary(rec: dict) -> dict:
+    rounds = rec.get("rounds", [])
+    latest = rounds[-1] if rounds else {}
+    return {
+        "id": rec.get("id"),
+        "goal": rec.get("goal"),
+        "created": rec.get("created"),
+        "rounds": len(rounds),
+        "latest_count": len(latest.get("hypotheses", [])),
+        "selected_id": rec.get("selected_id"),
+    }
+
+
+@app.get("/hypothesis/sessions")
+def list_hypothesis_sessions(ctx: UserContext = Depends(_ctx)):
+    out = []
+    for p in sorted(_hyp_dir(ctx).glob("*.json"), reverse=True):
+        rec = read_json(p, {})
+        if rec:
+            out.append(_hyp_summary(rec))
+    out.sort(key=lambda s: s.get("created") or "", reverse=True)
+    return out
+
+
+@app.get("/hypothesis/{hid}")
+def get_hypothesis(hid: str, ctx: UserContext = Depends(_ctx)):
+    rec = read_json(_hyp_path(ctx, hid), None)
+    if not rec:
+        raise HTTPException(404, "unknown hypothesis session")
+    return rec
+
+
+@app.post("/hypothesis/sessions")
+async def start_hypothesis(req: schemas.StartHypothesisRequest, ctx: UserContext = Depends(_ctx)):
+    goal = (req.goal or "").strip()
+    if not goal:
+        raise HTTPException(400, "goal must not be empty")
+    n = (req.config.n_initial if req.config and req.config.n_initial else None) or 4
+    n = max(2, min(6, n))
+    hyps, served = await _hypothesis.generate(goal, n=n)
+    if not hyps:
+        raise HTTPException(502, "hypothesis generation returned nothing; try rephrasing the goal")
+    _new_hyp_id(hyps, 0)
+    hid = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
+    rec = {
+        "id": hid,
+        "goal": goal,
+        "created": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "selected_id": None,
+        "rounds": [
+            {"round": 0, "parent_id": None, "feedback": None, "served_by": served, "hypotheses": hyps}
+        ],
+    }
+    write_json(_hyp_path(ctx, hid), rec)
+    return rec
+
+
+@app.post("/hypothesis/{hid}/refine")
+async def refine_hypothesis(
+    hid: str, req: schemas.RefineHypothesisRequest, ctx: UserContext = Depends(_ctx)
+):
+    rec = read_json(_hyp_path(ctx, hid), None)
+    if not rec:
+        raise HTTPException(404, "unknown hypothesis session")
+    parent = None
+    for rnd in rec.get("rounds", []):
+        for h in rnd.get("hypotheses", []):
+            if h.get("id") == req.parent_id:
+                parent = h
+                break
+        if parent:
+            break
+    if parent is None:
+        raise HTTPException(404, f"no hypothesis {req.parent_id} in this session")
+    n = max(2, min(6, req.n or 4))
+    hyps, served = await _hypothesis.generate(rec["goal"], parent=parent, feedback=req.feedback, n=n)
+    if not hyps:
+        raise HTTPException(502, "hypothesis generation returned nothing; try different feedback")
+    round_no = len(rec["rounds"])
+    _new_hyp_id(hyps, round_no)
+    for h in hyps:
+        h["parent_id"] = req.parent_id
+    rec["rounds"].append(
+        {
+            "round": round_no,
+            "parent_id": req.parent_id,
+            "feedback": (req.feedback or "").strip() or None,
+            "served_by": served,
+            "hypotheses": hyps,
+        }
+    )
+    write_json(_hyp_path(ctx, hid), rec)
+    return rec
+
+
+@app.post("/hypothesis/{hid}/select")
+def select_hypothesis(
+    hid: str, req: schemas.SelectHypothesisRequest, ctx: UserContext = Depends(_ctx)
+):
+    path = _hyp_path(ctx, hid)
+    rec = read_json(path, None)
+    if not rec:
+        raise HTTPException(404, "unknown hypothesis session")
+    ids = {h["id"] for rnd in rec.get("rounds", []) for h in rnd.get("hypotheses", [])}
+    if req.hypothesis_id not in ids:
+        raise HTTPException(404, f"no hypothesis {req.hypothesis_id} in this session")
+    rec["selected_id"] = req.hypothesis_id
+    rec["select_note"] = (req.note or "").strip() or None
+    write_json(path, rec)
+    return rec

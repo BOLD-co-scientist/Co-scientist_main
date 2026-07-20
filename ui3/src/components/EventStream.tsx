@@ -5,7 +5,7 @@ import EventItem from "./EventItem";
 import Composer from "./Composer";
 
 export default function EventStream() {
-  const { active, status, events, hasPending, pending, setRightTab, stop } = useApp();
+  const { active, status, events, hasPending, pending, setRightTab, stop, workingHyp, clearWorkingHyp, setMainView } = useApp();
   const scRef = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
 
@@ -44,6 +44,23 @@ export default function EventStream() {
           </button>
         )}
       </div>
+
+      {/* working-hypothesis bar — the hypothesis being investigated is passed to
+          the agent as context and persists here until cleared */}
+      {workingHyp && (
+        <div style={{ margin: "12px 24px 0", padding: "10px 14px", background: "var(--accent-soft)", border: "1px solid var(--accent-dim)", borderRadius: 10, display: "flex", alignItems: "center", gap: 11, animation: "fade .3s ease" }}>
+          <span style={{ fontFamily: "var(--mono)", fontSize: 9.5, fontWeight: 700, color: "var(--accent)", textTransform: "uppercase", letterSpacing: ".06em", flex: "0 0 auto" }}>Working hypothesis</span>
+          <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: "var(--hi)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={workingHyp.statement}>
+            {workingHyp.statement}
+          </span>
+          <button onClick={() => setMainView("hypothesis")} style={{ fontSize: 11.5, fontWeight: 600, color: "var(--accent)", fontFamily: "var(--mono)", flex: "0 0 auto" }}>
+            view
+          </button>
+          <button onClick={clearWorkingHyp} title="Stop focusing on this hypothesis" style={{ fontSize: 12, color: "var(--lo)", flex: "0 0 auto" }}>
+            {"✕"}
+          </button>
+        </div>
+      )}
 
       {/* pinned HITL banner */}
       {hasPending && (

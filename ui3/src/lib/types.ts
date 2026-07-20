@@ -140,30 +140,41 @@ export interface SendResult {
   error?: string;
 }
 
-// ---- Hypothesis explorer (client-side model for the Evolution view) ----
-export type HypStatus =
-  | "root"
-  | "path"
-  | "supported"
-  | "refuted"
-  | "parked"
-  | "proposed";
-
-export type HypDir =
-  | "triage"
-  | "offtarget"
-  | "redesign"
-  | "profile"
-  | "synergy";
-
-export interface Hyp {
+// ---- Hypothesis engine (server-authoritative; parallel-set flow) ----
+// One card in a parallel set. The backend generates these from a goal (round 0)
+// or from a chosen card + feedback (round N). See api/hypothesis.py.
+export interface HypCard {
   id: string;
-  parent: string | null;
-  dir: HypDir | null;
-  status: HypStatus;
-  title: string;
-  detail: string;
-  evidence?: string;
+  statement: string;
+  rationale: string;
+  round: number;
+  parent_id?: string | null;
+}
+
+export interface HypRound {
+  round: number;
+  parent_id: string | null;
+  feedback: string | null;
+  served_by: string; // which model produced this set (fable, or opus fallback)
+  hypotheses: HypCard[];
+}
+
+export interface HypSession {
+  id: string;
+  goal: string;
+  created: string;
+  selected_id: string | null;
+  select_note?: string | null;
+  rounds: HypRound[];
+}
+
+export interface HypSummary {
+  id: string;
+  goal: string;
+  created: string;
+  rounds: number;
+  latest_count: number;
+  selected_id: string | null;
 }
 
 export interface EvoLogEntry {
