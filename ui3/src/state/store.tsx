@@ -366,10 +366,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     (text: string, full: boolean): string => {
       const w = workingHypRef.current;
       if (!w) return text;
+      // Append the hypothesis AFTER the user's text so the session title (which
+      // is the task's first line) stays clean; the agent still gets the context.
       const ctx = full
-        ? `[Working hypothesis guiding this research — steer the work toward testing/developing it: "${w.statement}"${w.rationale ? ` (${w.rationale})` : ""}]`
+        ? `[Working hypothesis to steer this research toward testing/developing: "${w.statement}"${w.rationale ? ` (${w.rationale})` : ""}]`
         : `[Keep focusing on the working hypothesis: "${w.statement}"]`;
-      return `${ctx}\n\n${text}`;
+      return `${text}\n\n${ctx}`;
     },
     [],
   );
