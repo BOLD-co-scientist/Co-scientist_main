@@ -415,7 +415,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const arr = Array.from(fl);
       for (const f of arr) {
         try {
-          await api.uploadLibrary(f);
+          // A directory picker sets webkitRelativePath (e.g. "panel/ic50.csv");
+          // pass it so the server preserves the folder structure. A plain file
+          // picker leaves it empty → flat upload at the library root.
+          const rel = (f as File & { webkitRelativePath?: string }).webkitRelativePath;
+          await api.uploadLibrary(f, undefined, rel && rel.trim() ? rel : undefined);
         } catch (e) {
           setSendNotice(e instanceof HttpError && e.status === 413 ? "File too large for the library." : "Upload failed.");
         }

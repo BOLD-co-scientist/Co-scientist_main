@@ -16,7 +16,7 @@ from typing import Any
 import uuid
 
 import yaml
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from scaffold import sandbox, settings
 from scaffold._atomic import append_jsonl, read_json, write_json
@@ -507,6 +507,32 @@ def _safe_library_name(raw: str) -> str:
     return name
 
 
+def _safe_library_relpath(raw: str) -> Path:
+    """Sanitize a *relative* library path (folder upload), guarding traversal.
+
+    Accepts forward-slash separated paths like ``data/panel/ic50.csv``. Each
+    segment is validated (no ``..``, no absolute, no ``.staging``, no leading
+    dots) and the result is confirmed to resolve inside the library root. The
+    guard is enforced here, at the tool layer, not in the caller."""
+    parts = [seg for seg in Path(raw.replace("\\", "/")).as_posix().split("/") if seg]
+    if not parts:
+        raise HTTPException(400, f"invalid path: {raw!r}")
+    for seg in parts:
+        if seg in {"", ".", "..", ".staging"} or seg.startswith("."):
+            raise HTTPException(400, f"invalid path segment {seg!r} in {raw!r}")
+    rel = Path(*parts)
+    # Belt-and-suspenders: confirm it stays inside the library after resolving.
+    return rel
+
+
+def _resolve_library_path(ctx: UserContext, rel: Path) -> Path:
+    base = ctx.library.resolve()
+    target = (ctx.library / rel).resolve()
+    if target != base and base not in target.parents:
+        raise HTTPException(400, "path escapes the library")
+    return target
+
+
 def _append_library_event(ctx: UserContext, kind: str, **fields) -> None:
     ctx.library_events.parent.mkdir(parents=True, exist_ok=True)
     rec = {"ts": time.time(), "kind": kind, **fields}
@@ -516,11 +542,25 @@ def _append_library_event(ctx: UserContext, kind: str, **fields) -> None:
 
 @app.post("/library/files", response_model=schemas.LibraryUploadResponse)
 async def upload_library_file(
-    file: UploadFile = File(...), ctx: UserContext = Depends(_ctx)
+    file: UploadFile = File(...),
+    relpath: str | None = Form(default=None),
+    ctx: UserContext = Depends(_ctx),
 ):
+    """Upload one file to the shared library.
+
+    For a plain file upload, ``relpath`` is omitted and the file lands at the
+    library root under its basename. For a *folder* upload the client sends each
+    file with its ``relpath`` (the browser's ``webkitRelativePath``), preserving
+    the directory structure — guarded against traversal by
+    ``_safe_library_relpath``."""
     ctx.library_staging.mkdir(parents=True, exist_ok=True)
-    name = _safe_library_name(file.filename or "")
-    final_path = ctx.library / name
+    if relpath:
+        rel = _safe_library_relpath(relpath)
+        name = rel.as_posix()
+        final_path = _resolve_library_path(ctx, rel)
+    else:
+        name = _safe_library_name(file.filename or "")
+        final_path = ctx.library / name
     overwrote = final_path.exists()
     staging_path = ctx.library_staging / f"{uuid.uuid4().hex}.part"
     written = 0
@@ -537,6 +577,7 @@ async def upload_library_file(
                         f"file exceeds LIBRARY_MAX_BYTES ({settings.LIBRARY_MAX_BYTES} bytes)",
                     )
                 out.write(chunk)
+        final_path.parent.mkdir(parents=True, exist_ok=True)
         os.replace(staging_path, final_path)
     except HTTPException:
         staging_path.unlink(missing_ok=True)
@@ -549,43 +590,58 @@ async def upload_library_file(
     return schemas.LibraryUploadResponse(name=name, size=written, overwrote=overwrote)
 
 
+def _iter_library_files(ctx: UserContext):
+    """Yield every real file in the library, recursively, skipping the staging
+    area and dotfiles. Each is paired with its library-relative POSIX path so
+    the UI can reconstruct the folder tree."""
+    root = ctx.library
+    if not root.exists():
+        return
+    for p in root.rglob("*"):
+        if not p.is_file():
+            continue
+        rel = p.relative_to(root)
+        if any(seg == ".staging" or seg.startswith(".") for seg in rel.parts):
+            continue
+        yield rel.as_posix(), p
+
+
 @app.get("/library/files", response_model=list[schemas.LibraryFile])
 def list_library_files(ctx: UserContext = Depends(_ctx)):
     ctx.library_staging.mkdir(parents=True, exist_ok=True)
     out: list[schemas.LibraryFile] = []
-    for p in ctx.library.iterdir():
-        if p.name.startswith(".") or p.name == ".staging":
-            continue
+    for relname, p in _iter_library_files(ctx):
         try:
             stat = p.stat()
         except OSError:
-            try:
-                out.append(schemas.LibraryFile(name=p.name, size=0, mtime=p.lstat().st_mtime))
-            except OSError:
-                pass
             continue
-        if stat.st_size == 0 and p.is_dir():
-            continue
-        out.append(schemas.LibraryFile(name=p.name, size=stat.st_size, mtime=stat.st_mtime))
+        out.append(schemas.LibraryFile(name=relname, size=stat.st_size, mtime=stat.st_mtime))
     out.sort(key=lambda f: f.mtime, reverse=True)
     return out
 
 
-@app.delete("/library/files/{name}")
+@app.delete("/library/files/{name:path}")
 def delete_library_file(name: str, ctx: UserContext = Depends(_ctx)):
-    safe = _safe_library_name(name)
-    target = ctx.library / safe
+    """Delete a library file or folder by its library-relative path. A folder
+    path removes the subtree; empty parent folders left behind are pruned."""
+    rel = _safe_library_relpath(name)
+    target = _resolve_library_path(ctx, rel)
     if not target.exists() and not target.is_symlink():
-        raise HTTPException(404, f"no such library file: {safe}")
+        raise HTTPException(404, f"no such library file: {rel.as_posix()}")
     try:
         if target.is_dir() and not target.is_symlink():
             shutil.rmtree(target)
         else:
             target.unlink()
+        # Prune now-empty parent directories, up to (not including) the library.
+        parent = target.parent
+        while parent != ctx.library and parent.is_dir() and not any(parent.iterdir()):
+            parent.rmdir()
+            parent = parent.parent
     except OSError as e:
         raise HTTPException(500, f"delete failed: {e}")
-    _append_library_event(ctx, "library.delete", name=safe)
-    return {"ok": True, "name": safe}
+    _append_library_event(ctx, "library.delete", name=rel.as_posix())
+    return {"ok": True, "name": rel.as_posix()}
 
 
 @app.get("/library/health", response_model=schemas.LibraryHealth)
@@ -594,21 +650,18 @@ def library_health(ctx: UserContext = Depends(_ctx)):
     file_count = 0
     total_bytes = 0
     broken: list[dict[str, str]] = []
-    for p in ctx.library.iterdir():
-        if p.name.startswith(".") or p.name == ".staging":
-            continue
-        if p.is_symlink():
+    for relname, p in _iter_library_files(ctx):
+        if p.is_symlink() and not p.exists():
             try:
                 target = os.readlink(p)
             except OSError:
                 target = "?"
-            if not p.exists():
-                broken.append({"name": p.name, "target": str(target)})
-                continue
+            broken.append({"name": relname, "target": str(target)})
+            continue
         try:
             stat = p.stat()
         except OSError:
-            broken.append({"name": p.name, "target": "?"})
+            broken.append({"name": relname, "target": "?"})
             continue
         file_count += 1
         total_bytes += stat.st_size
