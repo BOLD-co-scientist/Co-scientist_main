@@ -54,6 +54,9 @@ interface AppCtx {
   select: (sid: string) => void;
   createSession: (task: string) => void;
   refreshSessions: () => Promise<void>;
+  draftNew: boolean;
+  startNewSession: () => void;
+  queue: string[];
 
   events: Ev[];
   pending: HitlPending[];
@@ -125,6 +128,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [events, setEvents] = useState<Ev[]>([]);
   const [pending, setPending] = useState<HitlPending[]>([]);
+  const [draftNew, setDraftNew] = useState(false); // "New session" compose view, no backend session yet
+  const [queue, setQueue] = useState<string[]>([]); // messages queued while the agent is busy
 
   const [mainView, setMainView] = useState<MainView>("session");
   const [rightTab, setRightTab] = useState<RightTab>("hitl");
@@ -372,6 +377,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     async (task: string) => {
       try {
         const { session_id } = await api.createSession(withHyp(task, true));
+        setDraftNew(false);
         await refreshSessions();
         select(session_id);
       } catch {
@@ -381,9 +387,25 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     [api, refreshSessions, select, withHyp],
   );
 
+  // "New session" opens an empty compose view (no backend session yet); the
+  // first message the user sends creates the real session.
+  const startNewSession = useCallback(() => {
+    setDraftNew(true);
+    setActiveId(null);
+    setEvents([]);
+    setQueue([]);
+    setMainView("session");
+  }, []);
+
   const send = useCallback(
     async (text: string): Promise<boolean> => {
-      if (!activeId || !text.trim()) return false;
+      if (!text.trim()) return false;
+      // Draft: the first message creates the session.
+      if (draftNew || !activeId) {
+        if (!activeId && !draftNew) return false;
+        await createSession(text);
+        return true;
+      }
       const sid = activeId;
       const msg = withHyp(text, false);
       // Blocked = agent mid-run waiting on HITL → interject; else resume the turn.
@@ -396,17 +418,46 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           return false;
         }
       }
+      // Busy (a turn is running) → queue it; the queue-flush effect sends it
+      // once the session goes idle, so the user can line up prompts.
+      if (active?.running) {
+        setQueue((q) => [...q, text]);
+        return true;
+      }
       const r = await api.sendMessage(sid, msg);
       if (!r.ok) {
-        if (r.status === 409) setSendNotice("Session is busy or has no resumable turn — your text was kept.");
-        else if (r.status !== 401) setSendNotice(r.error ?? "Message failed.");
+        if (r.status === 409) {
+          // No resumable turn yet, or a race with "running" — queue and retry on idle.
+          setQueue((q) => [...q, text]);
+        } else if (r.status !== 401) setSendNotice(r.error ?? "Message failed.");
         return false;
       }
       void refreshSessions();
       return true;
     },
-    [activeId, active, api, refreshSessions],
+    [activeId, active, api, refreshSessions, withHyp, draftNew, createSession],
   );
+
+  // Flush queued prompts one at a time when the active session goes idle. The
+  // flushing guard prevents a status-refresh race from sending two at once.
+  const queueRef = useRef<string[]>([]);
+  queueRef.current = queue;
+  const flushingRef = useRef(false);
+  useEffect(() => {
+    if (!activeId || !active || active.running || active.blocked) return;
+    if (flushingRef.current || queueRef.current.length === 0) return;
+    flushingRef.current = true;
+    const next = queueRef.current[0];
+    setQueue((q) => q.slice(1));
+    void (async () => {
+      try {
+        const r = await api.sendMessage(activeId, withHyp(next, false));
+        if (r.ok) await refreshSessions();
+      } finally {
+        flushingRef.current = false;
+      }
+    })();
+  }, [activeId, active, active?.running, active?.blocked, api, refreshSessions, withHyp]);
 
   const stop = useCallback(async () => {
     if (!activeId) return;
@@ -553,6 +604,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     select,
     createSession,
     refreshSessions,
+    draftNew,
+    startNewSession,
+    queue,
     events,
     pending,
     hasPending,

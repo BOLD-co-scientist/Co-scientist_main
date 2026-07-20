@@ -1,11 +1,8 @@
-import { useState } from "react";
 import { useApp } from "../state/store";
 import { statusOf } from "../lib/format";
 
 export default function SessionRail() {
-  const { sessions, activeId, select, mainView, setMainView, createSession } = useApp();
-  const [creating, setCreating] = useState(false);
-  const [task, setTask] = useState("");
+  const { sessions, activeId, select, mainView, setMainView, startNewSession, draftNew } = useApp();
 
   const navBtn = (on: boolean) =>
     ({
@@ -25,40 +22,12 @@ export default function SessionRail() {
   return (
     <div style={{ width: 272, flex: "0 0 272px", background: "var(--bg1)", borderRight: "1px solid var(--border)", display: "flex", flexDirection: "column", minHeight: 0 }}>
       <div style={{ padding: "14px 14px 10px" }}>
-        {creating ? (
-          <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-            <textarea
-              autoFocus
-              value={task}
-              onChange={(e) => setTask(e.target.value)}
-              placeholder="Describe the research task…"
-              rows={3}
-              style={{ resize: "none", padding: "9px 11px", background: "var(--bg0)", border: "1px solid var(--border)", borderRadius: 9, color: "var(--hi)", fontSize: 12.5, outline: "none" }}
-            />
-            <div style={{ display: "flex", gap: 6 }}>
-              <button
-                onClick={() => {
-                  if (task.trim()) createSession(task.trim());
-                  setTask("");
-                  setCreating(false);
-                }}
-                style={{ flex: 1, padding: 8, background: "var(--accent)", color: "#06121c", fontWeight: 600, borderRadius: 8, fontSize: 12.5 }}
-              >
-                Start
-              </button>
-              <button onClick={() => setCreating(false)} style={{ padding: "8px 12px", color: "var(--mid)", border: "1px solid var(--border)", borderRadius: 8, fontSize: 12.5 }}>
-                Cancel
-              </button>
-            </div>
-          </div>
-        ) : (
-          <button
-            onClick={() => setCreating(true)}
-            style={{ width: "100%", padding: 10, background: "var(--accent-soft)", border: "1px solid var(--accent-dim)", color: "var(--accent)", borderRadius: 9, fontWeight: 600, fontSize: 13, display: "flex", alignItems: "center", justifyContent: "center", gap: 7 }}
-          >
-            <span style={{ fontSize: 16, lineHeight: 1 }}>+</span> New session
-          </button>
-        )}
+        <button
+          onClick={startNewSession}
+          style={{ width: "100%", padding: 10, background: draftNew && mainView === "session" && !activeId ? "var(--accent)" : "var(--accent-soft)", border: "1px solid var(--accent-dim)", color: draftNew && mainView === "session" && !activeId ? "#06121c" : "var(--accent)", borderRadius: 9, fontWeight: 600, fontSize: 13, display: "flex", alignItems: "center", justifyContent: "center", gap: 7 }}
+        >
+          <span style={{ fontSize: 16, lineHeight: 1 }}>+</span> New session
+        </button>
       </div>
 
       <div style={{ padding: "2px 10px 10px", display: "flex", flexDirection: "column", gap: 1 }}>

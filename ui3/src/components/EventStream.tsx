@@ -5,7 +5,7 @@ import EventItem from "./EventItem";
 import Composer from "./Composer";
 
 export default function EventStream() {
-  const { active, status, events, hasPending, pending, setRightTab, stop, workingHyp, clearWorkingHyp, setMainView } = useApp();
+  const { active, status, events, hasPending, pending, setRightTab, stop, workingHyp, clearWorkingHyp, setMainView, draftNew } = useApp();
   const scRef = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
 
@@ -13,6 +13,29 @@ export default function EventStream() {
     const el = scRef.current;
     if (el && stick.current) el.scrollTop = el.scrollHeight;
   }, [events.length]);
+
+  // New-session draft: an empty session with just the composer — the user's
+  // first message creates the real session.
+  if (!active && draftNew) {
+    return (
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
+        {workingHyp && (
+          <div style={{ padding: "10px 24px", background: "var(--accent-soft)", borderBottom: "1px solid var(--accent-dim)", display: "flex", alignItems: "center", gap: 11 }}>
+            <span style={{ fontFamily: "var(--mono)", fontSize: 9.5, fontWeight: 700, color: "var(--accent)", textTransform: "uppercase", letterSpacing: ".06em", flex: "0 0 auto" }}>Working hypothesis</span>
+            <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: "var(--hi)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={workingHyp.statement}>{workingHyp.statement}</span>
+            <button onClick={clearWorkingHyp} style={{ fontSize: 12, color: "var(--lo)" }}>{"✕"}</button>
+          </div>
+        )}
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", color: "var(--lo)", gap: 6, padding: 24, textAlign: "center" }}>
+          <div style={{ fontSize: 15, fontWeight: 600, color: "var(--mid)" }}>New research session</div>
+          <div style={{ fontSize: 13, maxWidth: 420, lineHeight: 1.5 }}>
+            Describe your research task below and press Enter to start. {workingHyp ? "Your working hypothesis will frame it." : ""}
+          </div>
+        </div>
+        <Composer />
+      </div>
+    );
+  }
 
   if (!active) {
     return (
