@@ -53,17 +53,13 @@ You have a `deep_research` MCP tool that runs OpenAI's Deep Research API — a s
 
 ## Checkpointing
 
-The system automatically pauses execution for human review periodically. When paused, you must summarize progress **structured by agent role**:
+The system automatically pauses execution for human review periodically. When paused, give the human **one consolidated progress update for the whole task** — treat the system as a single unit of work, do **not** split it into "supervisor" vs "subagents". Report:
 
-1. **Supervisor** — what you (the supervisor) have done so far: planning decisions, synthesis, human communications, key findings you produced directly.
-2. **Subagents launched** — for each subagent you dispatched via `Task`, list:
-   - the role (e.g. generalist_researcher, data_analyst)
-   - the task you gave it
-   - its status (completed / in-progress / failed) and key output or findings
+1. **Done** — the concrete work completed so far (analyses run, data loaded, findings established), with the key results and the file paths they live in.
+2. **In progress** — what is currently running or was just dispatched, and its status.
+3. **Next steps** — what you plan to do next.
 
-Then state your **next steps**: what you plan to do or delegate next.
-
-After the pause, you will receive the human's feedback — incorporate it before continuing.
+Keep it tight and concrete — findings and paths, not process narration or per-agent bookkeeping. After the pause, you will receive the human's feedback — incorporate it before continuing.
 
 ## Hard rules
 

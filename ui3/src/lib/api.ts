@@ -109,17 +109,58 @@ function mapSession(r: Raw): SessionSummary {
   };
 }
 
+// Human-readable verbs per HITL kind, so the card says what will happen in
+// plain language instead of echoing the raw tool name.
+const HITL_ACTIONS: Record<string, string> = {
+  propose_merge: "Merge this evolution into your live system",
+  propose_skill: "Save this workflow as a reusable skill",
+  ask: "The agent needs your input to continue",
+  library_write: "Write a file into your library",
+};
+
+// Turn a HITL payload into readable prose. scaffold/hitl.py writes
+// {id, ts, kind, summary, payload, decision}; the payload shape varies by kind
+// (evolution propose_merge: {branch, diff_preview, rationale, ...};
+// skill: {name, description, body}; ask: {question}). Never dump raw JSON at
+// the human — extract the fields that matter and format them.
+function readableDetail(payload: unknown): string | undefined {
+  if (payload == null) return undefined;
+  if (typeof payload === "string") return payload;
+  if (typeof payload !== "object") return String(payload);
+  const p = payload as Record<string, unknown>;
+  const parts: string[] = [];
+  const str = (k: string) => (typeof p[k] === "string" ? (p[k] as string).trim() : "");
+
+  if (str("rationale")) parts.push(str("rationale"));
+  if (str("question")) parts.push(str("question"));
+  if (str("name") && str("description")) parts.push(`Skill “${str("name")}” — ${str("description")}`);
+  if (str("body")) parts.push(str("body"));
+  if (str("branch")) parts.push(`Branch: ${str("branch")}`);
+
+  // Parse changed-file names out of a unified diff preview → a tidy list.
+  const diff = str("diff_preview");
+  if (diff) {
+    const files = Array.from(diff.matchAll(/^diff --git a\/(.+?) b\//gm)).map((m) => m[1]);
+    if (files.length) {
+      parts.push(`Files changed (${files.length}):\n` + files.map((f) => `  • ${f}`).join("\n"));
+    }
+  }
+
+  if (parts.length) return parts.join("\n\n");
+  // Unknown shape: key: value lines (skip noisy blobs) — still no JSON braces.
+  const lines = Object.entries(p)
+    .filter(([k]) => !["diff_preview", "body"].includes(k))
+    .map(([k, v]) => `${k}: ${typeof v === "string" ? v : JSON.stringify(v)}`);
+  return lines.length ? lines.join("\n") : undefined;
+}
+
 function mapPending(r: Raw): HitlPending {
-  // scaffold/hitl.py writes {id, ts, kind, summary, payload, decision}.
-  const payload = r.payload;
-  let detail: string | undefined;
-  if (typeof payload === "string") detail = payload;
-  else if (payload != null) detail = JSON.stringify(payload, null, 2);
+  const kind = (r.kind as string) ?? "";
   return {
     request_id: (r.id as string) ?? "",
-    title: (r.summary as string) ?? (r.kind as string) ?? "Approval required",
-    action: (r.kind as string) ?? undefined,
-    detail,
+    title: (r.summary as string) ?? HITL_ACTIONS[kind] ?? kind ?? "Approval required",
+    action: HITL_ACTIONS[kind] ?? kind ?? undefined,
+    detail: readableDetail(r.payload),
     requester: (r.requester as string) ?? undefined,
     created: (r.ts as string) ?? undefined,
   };

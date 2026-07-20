@@ -245,14 +245,20 @@ async def _process_message_stream(client, session_id: str, event_state: dict):
         if isinstance(message, AssistantMessage):
             for block in message.content:
                 if isinstance(block, TextBlock) and block.text.strip():
-                    bus.send(
-                        session_id,
-                        sender=SUPERVISOR_AGENT_ID,
-                        target="human",
-                        kind="report",
-                        payload={"text": block.text},
-                    )
-                    event_state["last_report_text"] = block.text
+                    # The end-of-turn skill reflection asks the supervisor to
+                    # reply "NONE" when nothing is reusable; that is internal
+                    # bookkeeping, not a message to the human. Suppress reports
+                    # during reflection so a bare "NONE" never surfaces as the
+                    # supervisor's reply.
+                    if not event_state.get("suppress_reports"):
+                        bus.send(
+                            session_id,
+                            sender=SUPERVISOR_AGENT_ID,
+                            target="human",
+                            kind="report",
+                            payload={"text": block.text},
+                        )
+                        event_state["last_report_text"] = block.text
                 elif isinstance(block, ToolUseBlock):
                     eventlog.append(
                         session_id,
@@ -349,8 +355,11 @@ async def _maybe_propose_skill(client, session_id: str, event_state: dict) -> No
     existing_txt = (
         "\n".join(f"- {s['name']}: {s['description']}" for s in existing) or "(none yet)"
     )
-    # Suspend the checkpoint gate so this short reflection pass isn't deferred.
+    # Suspend the checkpoint gate so this short reflection pass isn't deferred,
+    # and suppress human-facing reports so the reflection's "NONE" / narration
+    # never surfaces to the human as a supervisor reply.
     event_state["suspend_checkpoints"] = True
+    event_state["suppress_reports"] = True
     try:
         await client.query(
             "[Reflection] Before we finish: review the workflow you just completed."
@@ -369,6 +378,7 @@ async def _maybe_propose_skill(client, session_id: str, event_state: dict) -> No
         )
     finally:
         event_state["suspend_checkpoints"] = False
+        event_state["suppress_reports"] = False
 
 
 async def _turn_loop(client, session_id: str, event_state: dict) -> None:
