@@ -54,7 +54,11 @@ def _set_limits():
 
 
 def make_tools(session_id: str):
-    @tool("run", "Execute Python code in an ephemeral subprocess. Returns stdout+stderr.", {
+    @tool("run", "Execute Python code in an ephemeral subprocess (stdlib, pandas, and numpy "
+          "are available). The working dir is a private scratch dir; researcher_data is mounted "
+          "READ-ONLY at ./data — e.g. open('data/LTEMData/d_labeled.tsv') or "
+          "pd.read_csv('data/LTEMData/PM1_WT_baseline.csv'). Write outputs to the cwd. "
+          "Returns stdout+stderr.", {
         "code": str,
     })
     async def run_(args: dict[str, Any]) -> dict:
