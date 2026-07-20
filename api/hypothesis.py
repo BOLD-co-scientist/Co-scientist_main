@@ -32,7 +32,7 @@ from anthropic import AsyncAnthropic
 
 HYPOTHESIS_MODEL = os.environ.get("COSCIENTIST_HYPOTHESIS_MODEL", "claude-fable-5")
 HYPOTHESIS_FALLBACK_MODEL = os.environ.get("COSCIENTIST_HYPOTHESIS_FALLBACK", "claude-opus-4-8")
-_MAX_TOKENS = 2000
+_MAX_TOKENS = 4000  # 6 hypotheses with rationale can exceed 2000 and truncate mid-JSON
 
 
 def _system() -> str:
@@ -127,14 +127,20 @@ async def generate(
     served = HYPOTHESIS_MODEL
     text = ""
     try:
-        text, refusal = await _call(client, HYPOTHESIS_MODEL, system, user)
+        try:
+            text, refusal = await _call(client, HYPOTHESIS_MODEL, system, user)
+        except Exception:
+            refusal = "error"  # any API error on the primary model → fall back
         if refusal:
             served = HYPOTHESIS_FALLBACK_MODEL
-            text, _ = await _call(client, HYPOTHESIS_FALLBACK_MODEL, system, user)
-    except Exception:
-        # Any API error on the primary model → try the fallback once.
-        served = HYPOTHESIS_FALLBACK_MODEL
-        text, _ = await _call(client, HYPOTHESIS_FALLBACK_MODEL, system, user)
+            try:
+                text, _ = await _call(client, HYPOTHESIS_FALLBACK_MODEL, system, user)
+            except Exception:
+                # Both models failed — return empty so the caller reports a clean
+                # "no hypotheses" 502 rather than propagating an unhandled 500.
+                text = ""
+    finally:
+        await client.close()
 
     hyps = _parse(text, n)
     return hyps, served

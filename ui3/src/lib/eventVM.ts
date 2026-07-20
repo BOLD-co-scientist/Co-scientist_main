@@ -172,7 +172,7 @@ export function toVM(e: Ev, prev?: Ev): EventVM {
     const busBody = (typeof payloadText === "string" && payloadText.trim() ? payloadText : firstStr("text")) ?? "";
     // A message addressed to the human IS the supervisor's reply — render it as a
     // full response bubble so it's actually readable, not a truncated one-liner.
-    if (s("target") === "human") {
+    if (s("target") === "human" && busBody.trim()) {
       return {
         variant: "bubble",
         id: e.id,

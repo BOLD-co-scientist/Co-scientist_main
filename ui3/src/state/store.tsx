@@ -128,6 +128,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [events, setEvents] = useState<Ev[]>([]);
+  const eventsRef = useRef<Ev[]>([]);
+  eventsRef.current = events;
   const [pending, setPending] = useState<HitlPending[]>([]);
   const [draftNew, setDraftNew] = useState(false); // "New session" compose view, no backend session yet
   const [queue, setQueue] = useState<string[]>([]); // messages queued while the agent is busy
@@ -433,9 +435,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const r = await api.sendMessage(sid, msg);
       if (!r.ok) {
         if (r.status === 409) {
-          // No resumable turn yet, or a race with "running" — queue and retry on idle.
+          // No resumable turn yet, or a race with "running" — queue and retry on
+          // idle. This is an accepted enqueue, not a rejection: return true so the
+          // composer clears the box (else the text lingers and re-enqueues on the
+          // next Enter, duplicating the prompt).
           setQueue((q) => [...q, text]);
-        } else if (r.status !== 401) setSendNotice(r.error ?? "Message failed.");
+          return true;
+        }
+        if (r.status !== 401) setSendNotice(r.error ?? "Message failed.");
         return false;
       }
       void refreshSessions();
@@ -454,11 +461,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (flushingRef.current || queueRef.current.length === 0) return;
     flushingRef.current = true;
     const next = queueRef.current[0];
-    setQueue((q) => q.slice(1));
     void (async () => {
       try {
         const r = await api.sendMessage(activeId, withHyp(next, false));
-        if (r.ok) await refreshSessions();
+        if (r.ok) {
+          // Remove only after a confirmed send. On failure we leave the item at
+          // the front so it isn't silently lost; the effect retries it the next
+          // time the session is observed idle. (Guard against the queue having
+          // changed underneath us — only drop the head if it's still `next`.)
+          setQueue((q) => (q[0] === next ? q.slice(1) : q));
+          await refreshSessions();
+        }
       } finally {
         flushingRef.current = false;
       }
@@ -483,12 +496,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         await api.answerHitl(sid, requestId, decision, note);
         await refreshSessions();
         await refreshPending(sid);
-        // Reconnect so the resumed run's new events stream in.
-        setEvents((cur) => {
-          const lastId = cur.length ? cur[cur.length - 1].id : undefined;
-          openStreamFor(sid, lastId);
-          return cur;
-        });
+        // Reconnect so the resumed run's new events stream in. Read the last id
+        // from a ref (not inside a setState updater — updaters must be pure and
+        // run twice under StrictMode, which would double-open the stream).
+        const cur = eventsRef.current;
+        const lastId = cur.length ? cur[cur.length - 1].id : undefined;
+        openStreamFor(sid, lastId);
       } catch {
         /* ignore */
       }

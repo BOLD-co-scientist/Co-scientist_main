@@ -705,6 +705,8 @@ def hitl_answer(
     sid: str, request_id: str, body: schemas.HitlAnswer, ctx: UserContext = Depends(_ctx)
 ):
     sid = _safe_sid(sid)
+    if not re.fullmatch(r"[A-Za-z0-9_.:-]+", request_id or ""):
+        raise HTTPException(400, f"invalid request id: {request_id!r}")
     if not _session_exists(ctx, sid):
         raise HTTPException(404, "unknown session")
     pending = _pending_dir(ctx, sid) / f"{request_id}.json"
@@ -715,7 +717,7 @@ def hitl_answer(
     rec["decided_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     rec["note"] = body.note
     write_json(_answered_dir(ctx, sid) / f"{request_id}.json", rec)
-    pending.unlink()
+    pending.unlink(missing_ok=True)
     _append_event(ctx, sid, actor="human", kind="hitl.answer", ref=request_id, decision=body.decision)
     return {"ok": True}
 
