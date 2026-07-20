@@ -73,6 +73,9 @@ async def run_command(session_id: str, command: str, base: str | None = None) ->
     settings.ensure_session_dirs(session_id)
     sandbox.ensure_repo()
     wt = sandbox.create(_slugify(command), base=base)
+    # Diverge the branch from its base right away so it appears as an in-flight
+    # child node in the evolution graph even if the agent makes no commits.
+    sandbox.mark_start(wt, f"evolution (in progress): {command}")
     eventlog.append(
         session_id,
         actor=EVOLUTION_AGENT_ID,

@@ -60,6 +60,14 @@ def create(slug: str, base: str | None = None) -> Worktree:
     return Worktree(path=path, branch=branch, base=base_sha)
 
 
+def mark_start(wt: Worktree, message: str) -> str:
+    """Put an empty marker commit on the fresh evo branch so it *diverges from
+    its base immediately* and shows up as an in-flight child node in the
+    evolution graph — even before the agent commits any real edits."""
+    _git("commit", "--allow-empty", "-m", message, cwd=wt.path)
+    return _git("rev-parse", "HEAD", cwd=wt.path).strip()
+
+
 def diff(wt: Worktree) -> str:
     return _git("diff", f"{wt.base}..HEAD", cwd=wt.path)
 

@@ -95,8 +95,12 @@ export default function EvolutionGraph() {
   const { git, loadGit } = useApp();
   const [sel, setSel] = useState<string | null>(null);
 
+  // Refetch on mount + poll, so a newly spawned/merged evolution appears as a
+  // child node without a manual reload.
   useEffect(() => {
     loadGit();
+    const id = setInterval(() => loadGit(), 8000);
+    return () => clearInterval(id);
   }, [loadGit]);
 
   const commits = git?.commits ?? [];
