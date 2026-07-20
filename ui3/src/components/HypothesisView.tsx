@@ -17,8 +17,9 @@ import type { HypSession } from "../lib/types";
 const EXAMPLE = "Why do some bacterial populations tolerate antibiotics without genetic resistance?";
 
 export default function HypothesisView() {
-  const { api } = useApp();
-  const [session, setSession] = useState<HypSession | null>(null);
+  // The hypothesis session lives in the store so it persists across page
+  // switches and reloads; the view keeps only transient UI state.
+  const { api, hyp: session, setHyp: setSession } = useApp();
   const [goal, setGoal] = useState("");
   const [loading, setLoading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);

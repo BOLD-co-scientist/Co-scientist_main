@@ -15,6 +15,8 @@ import type {
   Ev,
   GitHistory,
   HitlPending,
+  HypCard,
+  HypSession,
   LibraryFile,
   LibraryHealth,
   MemoryHit,
@@ -25,6 +27,7 @@ import type {
 
 const TOKEN_KEY = "csk_token";
 const THEME_KEY = "cs_theme";
+const HYP_KEY = "cs_active_hyp"; // persisted id of the open hypothesis session
 const USE_MOCK = import.meta.env.VITE_MOCK === "1";
 
 type MainView = "session" | "hypothesis" | "evolution";
@@ -82,6 +85,12 @@ interface AppCtx {
 
   git: GitHistory | null;
   loadGit: () => void;
+
+  // ---- hypothesis session (persists across page switches + reload) ----
+  hyp: HypSession | null;
+  setHyp: (h: HypSession | null) => void;
+  workingHyp: HypCard | null; // the selected card in `hyp`, or null
+  clearWorkingHyp: () => void;
 }
 
 const Ctx = createContext<AppCtx | null>(null);
@@ -126,11 +135,30 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [roles, setRoles] = useState<RoleSummary[]>([]);
   const [memory, setMemory] = useState<MemoryHit[]>([]);
   const [git, setGit] = useState<GitHistory | null>(null);
+  const [hyp, setHypState] = useState<HypSession | null>(null);
+
+  // Lives in the store (not the view) so the open hypothesis session survives
+  // switching away from the Hypotheses page; the id is persisted so it also
+  // survives a reload.
+  const setHyp = useCallback((h: HypSession | null) => {
+    setHypState(h);
+    if (h) localStorage.setItem(HYP_KEY, h.id);
+    else localStorage.removeItem(HYP_KEY);
+  }, []);
+  const workingHyp = useMemo(
+    () => (hyp?.selected_id ? hyp.rounds.flatMap((r) => r.hypotheses).find((c) => c.id === hyp.selected_id) ?? null : null),
+    [hyp],
+  );
+  const clearWorkingHyp = useCallback(() => {
+    setHypState((cur) => (cur ? { ...cur, selected_id: null } : cur));
+  }, []);
 
   const tokenRef = useRef<string | null>(localStorage.getItem(TOKEN_KEY));
   const streamRef = useRef<StreamHandle | null>(null);
   const activeIdRef = useRef<string | null>(null);
   activeIdRef.current = activeId;
+  const workingHypRef = useRef<HypCard | null>(null);
+  workingHypRef.current = workingHyp;
 
   const logout = useCallback(() => {
     tokenRef.current = null;
@@ -238,6 +266,20 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     })();
   }, [authed, api]);
 
+  // ---- restore the persisted hypothesis session on auth ----
+  useEffect(() => {
+    if (!authed) return;
+    const id = localStorage.getItem(HYP_KEY);
+    if (!id) return;
+    (async () => {
+      try {
+        setHypState(await api.getHypothesis(id));
+      } catch {
+        localStorage.removeItem(HYP_KEY); // gone on the server — drop the stale id
+      }
+    })();
+  }, [authed, api]);
+
   // ---- open/close the event stream for the active session ----
   const openStreamFor = useCallback(
     (sid: string, sinceId?: string) => {
@@ -311,34 +353,49 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
+  // Prepend the working hypothesis so the agent stays anchored to it. `full`
+  // frames a whole new session; the compact form reminds an ongoing one.
+  const withHyp = useCallback(
+    (text: string, full: boolean): string => {
+      const w = workingHypRef.current;
+      if (!w) return text;
+      const ctx = full
+        ? `[Working hypothesis guiding this research — steer the work toward testing/developing it: "${w.statement}"${w.rationale ? ` (${w.rationale})` : ""}]`
+        : `[Keep focusing on the working hypothesis: "${w.statement}"]`;
+      return `${ctx}\n\n${text}`;
+    },
+    [],
+  );
+
   const createSession = useCallback(
     async (task: string) => {
       try {
-        const { session_id } = await api.createSession(task);
+        const { session_id } = await api.createSession(withHyp(task, true));
         await refreshSessions();
         select(session_id);
       } catch {
         /* ignore */
       }
     },
-    [api, refreshSessions, select],
+    [api, refreshSessions, select, withHyp],
   );
 
   const send = useCallback(
     async (text: string): Promise<boolean> => {
       if (!activeId || !text.trim()) return false;
       const sid = activeId;
+      const msg = withHyp(text, false);
       // Blocked = agent mid-run waiting on HITL → interject; else resume the turn.
       if (active?.blocked) {
         try {
-          await api.interject(sid, text);
+          await api.interject(sid, msg);
           return true;
         } catch {
           setSendNotice("Could not reach the agent.");
           return false;
         }
       }
-      const r = await api.sendMessage(sid, text);
+      const r = await api.sendMessage(sid, msg);
       if (!r.ok) {
         if (r.status === 409) setSendNotice("Session is busy or has no resumable turn — your text was kept.");
         else if (r.status !== 401) setSendNotice(r.error ?? "Message failed.");
@@ -516,6 +573,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     searchMemory,
     git,
     loadGit,
+    hyp,
+    setHyp,
+    workingHyp,
+    clearWorkingHyp,
   };
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
