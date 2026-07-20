@@ -2,6 +2,7 @@ import { streamEvents } from "./sse";
 import type {
   AuthMe,
   Ev,
+  CommitDetail,
   GitHistory,
   HitlDecision,
   HitlPending,
@@ -58,6 +59,8 @@ export interface Api {
     sid?: string,
   ): Promise<MemorySearchResult>;
   gitHistory(limit?: number): Promise<GitHistory>;
+  getCommit(sha: string): Promise<CommitDetail>;
+  spawnEvolution(command: string, base?: string): Promise<{ session_id: string; command: string }>;
 }
 
 export interface ApiConfig {
@@ -150,7 +153,9 @@ function mapGit(r: Raw): GitHistory {
     const refs = ((c.refs as string[]) ?? []).map((name) => ({ name, kind: refKind(name) }));
     if (head && sha === head) refs.unshift({ name: "HEAD", kind: "head" as const });
     return {
-      sha: sha.slice(0, 9),
+      // Keep the full sha so parent→child edge matching works; components
+      // truncate for display. (Parents are full-length shas from git.)
+      sha,
       parents: (c.parents as string[]) ?? [],
       author: (c.author as string) ?? "",
       ts: typeof c.ts === "number" ? fmtEpoch(c.ts) : String(c.ts ?? ""),
@@ -330,5 +335,13 @@ export function createApi(cfg: ApiConfig): Api {
 
     // Public endpoint — no auth (§5).
     gitHistory: async (limit = 200) => mapGit(await req<Raw>(`/git/history?limit=${limit}`)),
+
+    getCommit: (sha) => req<CommitDetail>(`/git/commit/${encodeURIComponent(sha)}`),
+
+    spawnEvolution: (command, base) =>
+      req<{ session_id: string; command: string }>("/evolution/commands", {
+        method: "POST",
+        body: JSON.stringify({ command, base }),
+      }),
   };
 }

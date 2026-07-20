@@ -33,6 +33,7 @@ type Theme = "dark" | "light";
 
 interface AppCtx {
   mock: boolean;
+  api: Api;
   theme: Theme;
   toggleTheme: () => void;
 
@@ -49,6 +50,7 @@ interface AppCtx {
   status: StatusView | null;
   select: (sid: string) => void;
   createSession: (task: string) => void;
+  refreshSessions: () => Promise<void>;
 
   events: Ev[];
   pending: HitlPending[];
@@ -474,6 +476,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const value: AppCtx = {
     mock: USE_MOCK,
+    api,
     theme,
     toggleTheme,
     authed,
@@ -488,6 +491,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     status,
     select,
     createSession,
+    refreshSessions,
     events,
     pending,
     hasPending,

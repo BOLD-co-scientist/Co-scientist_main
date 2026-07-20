@@ -116,6 +116,22 @@ export interface GitHistory {
   commits: GitCommit[];
 }
 
+// What's *in* a commit — for the clickable evolution-graph node detail.
+export interface CommitFile {
+  path: string;
+  additions: number;
+  deletions: number;
+  binary?: boolean;
+}
+export interface CommitDetail {
+  sha: string;
+  subject: string;
+  author: string;
+  ts: number;
+  parents: string[];
+  files: CommitFile[];
+}
+
 /** Result of POST /messages — carries status so the UI can handle 409 (§7.6). */
 export interface SendResult {
   ok: boolean;

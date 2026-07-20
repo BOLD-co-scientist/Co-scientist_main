@@ -16,7 +16,7 @@ export default function EvolutionView() {
             <span style={{ fontFamily: "var(--mono)", fontSize: 10, fontWeight: 600, padding: "2px 7px", borderRadius: 5, background: "var(--evo-soft)", color: "var(--evo)" }}>self-modify</span>
           </div>
           <div style={{ marginTop: 4, fontSize: 12, color: "var(--mid)" }}>
-            How the system has rewritten its own capabilities. Each node is a skill it taught itself; merges into main pass through the same approval gate.
+            How the system has rewritten its own capabilities, from your harness repo. Each node is a commit; every self-modification opens a branch and merges into main through the same approval gate.
           </div>
         </div>
         <div style={{ display: "flex", gap: 3, padding: 3, background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 10, flex: "0 0 auto" }}>
@@ -28,7 +28,7 @@ export default function EvolutionView() {
           </button>
         </div>
       </div>
-      {tab === "graph" ? <EvolutionGraph onViewLog={() => setTab("log")} /> : <ActivityLog />}
+      {tab === "graph" ? <EvolutionGraph /> : <ActivityLog />}
     </div>
   );
 }

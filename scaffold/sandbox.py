@@ -45,16 +45,19 @@ def ensure_repo() -> None:
             pass
 
 
-def create(slug: str) -> Worktree:
+def create(slug: str, base: str | None = None) -> Worktree:
+    """Create an ``evo/*`` worktree branched off ``base`` (a commit sha or ref),
+    or off HEAD when ``base`` is None. Passing a base lets the human pick which
+    node in the evolution graph a new feature descends from."""
     ensure_repo()
     settings.WORKTREES.mkdir(parents=True, exist_ok=True)
     ts = time.strftime("%Y%m%d-%H%M%S")
     name = f"{ts}__{slug}"
     branch = f"evo/{name}"
     path = settings.WORKTREES / name
-    base = _git("rev-parse", "HEAD").strip()
-    _git("worktree", "add", "-b", branch, str(path), base)
-    return Worktree(path=path, branch=branch, base=base)
+    base_sha = _git("rev-parse", (base or "HEAD")).strip()
+    _git("worktree", "add", "-b", branch, str(path), base_sha)
+    return Worktree(path=path, branch=branch, base=base_sha)
 
 
 def diff(wt: Worktree) -> str:
@@ -97,8 +100,14 @@ _LOG_FMT = "%H%x1f%P%x1f%an%x1f%at%x1f%D%x1f%s"
 _FIELD_SEP = "\x1f"
 
 
-def history(limit: int = 200) -> dict:
-    """Read-only snapshot of the full branch graph across *all* refs.
+def history(limit: int = 200, repo: Path | None = None) -> dict:
+    """Read-only snapshot of the branch graph across *all* refs of ``repo``.
+
+    ``repo`` defaults to ``settings.ROOT``, but callers should pass a specific
+    repo path to scope the graph — e.g. the API passes the authenticated user's
+    own harness root so a researcher sees only *their* evolution lineage (their
+    ``evo/*`` branches and merges into their own ``main``), never the shared
+    development repo or another tenant's history.
 
     Returns ``{"commits": [...], "head": <sha|None>}`` where each commit is a
     dict ``{sha, parents, author, ts, refs, subject}``. Parents drive the graph
@@ -106,12 +115,19 @@ def history(limit: int = 200) -> dict:
     the UI can colour merged history apart from in-flight evolution branches.
     Never mutates the repo — safe to call on every UI refresh.
     """
-    ensure_repo()
+    if repo is None:
+        ensure_repo()
+        repo = settings.ROOT
+    elif not (repo / ".git").exists():
+        # A freshly created tenant root that has not been git-init'd yet has no
+        # history to show; report an empty graph rather than erroring.
+        return {"commits": [], "head": None}
     raw = _git(
         "log",
         "--all",
         f"--max-count={int(limit)}",
         f"--pretty=format:{_LOG_FMT}",
+        cwd=repo,
     )
     commits: list[dict] = []
     for line in raw.splitlines():
@@ -137,10 +153,49 @@ def history(limit: int = 200) -> dict:
             }
         )
     try:
-        head = _git("rev-parse", "HEAD").strip()
+        head = _git("rev-parse", "HEAD", cwd=repo).strip()
     except GitError:
         head = None
     return {"commits": commits, "head": head}
+
+
+def commit_detail(sha: str, repo: Path | None = None) -> dict:
+    """What's *in* a commit: metadata plus the files it changed (with per-file
+    added/removed line counts). Powers the clickable node detail in the
+    evolution graph. ``repo`` defaults to ``settings.ROOT``; the API passes the
+    authenticated user's own harness root. Read-only."""
+    repo = repo or settings.ROOT
+    meta = _git("show", "--no-patch", f"--format={_LOG_FMT}", sha, cwd=repo).strip()
+    parts = meta.split(_FIELD_SEP)
+    if len(parts) < 6:
+        raise GitError(f"unexpected show output for {sha!r}")
+    full_sha, parents, author, ts, _decor, subject = parts[:6]
+    files: list[dict] = []
+    raw = _git("show", "--numstat", "--format=", sha, cwd=repo)
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        cols = line.split("\t")
+        if len(cols) < 3:
+            continue
+        adds, dels, path = cols[0], cols[1], cols[2]
+        files.append(
+            {
+                "path": path,
+                "additions": int(adds) if adds.isdigit() else 0,
+                "deletions": int(dels) if dels.isdigit() else 0,
+                "binary": adds == "-",
+            }
+        )
+    return {
+        "sha": full_sha,
+        "subject": subject,
+        "author": author,
+        "ts": float(ts) if ts.strip() else 0.0,
+        "parents": parents.split() if parents.strip() else [],
+        "files": files,
+    }
 
 
 def in_worktree(wt: Worktree, p: Path) -> bool:
