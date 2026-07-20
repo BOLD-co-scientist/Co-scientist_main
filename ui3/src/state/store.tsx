@@ -85,6 +85,7 @@ interface AppCtx {
   roles: RoleSummary[];
   memory: MemoryHit[];
   loadContext: () => void;
+  loadRoles: () => Promise<void>;
   searchMemory: (q: string) => Promise<void>;
 
   git: GitHistory | null;
@@ -550,6 +551,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   );
 
   // ---- context (roles + memory) ----
+  // Refetch the agent roles only — so the Context panel can keep them live
+  // (a merged evolution that adds an agent shows up on the next poll).
+  const loadRoles = useCallback(async () => {
+    try {
+      setRoles(await api.listRoles());
+    } catch {
+      /* ignore */
+    }
+  }, [api]);
+
   const loadContext = useCallback(async () => {
     try {
       const [r, m] = await Promise.all([api.listRoles(), api.searchMemory("project", "", 5, activeId ?? undefined)]);
@@ -630,6 +641,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     roles,
     memory,
     loadContext,
+    loadRoles,
     searchMemory,
     git,
     loadGit,
