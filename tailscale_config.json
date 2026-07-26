@@ -8,7 +8,7 @@
     "coscientist-ui.tail9d1a6c.ts.net:443": {
       "Handlers": {
         "/": {
-          "Proxy": "http://127.0.0.1:8501"
+          "Proxy": "http://127.0.0.1:8765"
         }
       }
     }

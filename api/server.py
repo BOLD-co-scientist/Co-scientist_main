@@ -1026,3 +1026,13 @@ def select_hypothesis(
     rec["select_note"] = (req.note or "").strip() or None
     write_json(path, rec)
     return rec
+
+
+# ui3 is the default UI: serve the built SPA from the API origin so the
+# browser's fetches to /research, /hitl, ... need no proxy or CORS. Mounted
+# last, so every API route above wins over the static catch-all.
+_UI3_DIST = settings.ROOT / "ui3" / "dist"
+if _UI3_DIST.is_dir():
+    from fastapi.staticfiles import StaticFiles
+
+    app.mount("/", StaticFiles(directory=_UI3_DIST, html=True), name="ui3")

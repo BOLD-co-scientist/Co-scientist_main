@@ -50,7 +50,11 @@ services:
       - ./tests:/app/tests
       - ./worktrees:/app/worktrees
       - ./.git:/app/.git
+      # ui3 (default UI) — built SPA served by the API at "/" (npm run build in ui3/)
+      - ./ui3/dist:/app/ui3/dist:ro
 
+  # Legacy Streamlit UI — no longer the public entry (tailscale now proxies to
+  # the API, which serves ui3). Kept reachable on :8501 inside the tailnet host.
   coscientist-ui:
     build:
       context: .

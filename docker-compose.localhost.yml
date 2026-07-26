@@ -1,0 +1,63 @@
+# Localhost-only deployment — no tailscale. API + ui3 (default UI) on
+# 127.0.0.1:8765; legacy Streamlit UI on 127.0.0.1:8501. Containers talk over
+# a private bridge network. Build ui3 first: (cd ui3 && npm run build).
+#
+# Usage:
+#   UID=$(id -u) GID=$(id -g) docker compose -f docker-compose.localhost.yml \
+#     -p coscientist_local up -d --build
+#
+# Runs as a separate compose project so it never touches the tailscale stack
+# defined in docker-compose.yml.
+
+services:
+  coscientist-api:
+    build:
+      context: .
+      args:
+        UID: ${UID}
+        GID: ${GID}
+    image: ${USER}_coscientist:dev
+    container_name: ${USER}_coscientist-local-api
+    env_file: .env
+    environment:
+      COSCIENTIST_ROOT: /app
+      COSCIENTIST_SPOOL_DIR: /app/state/jobspool
+      COSCIENTIST_JOB_IMAGE: ${COSCIENTIST_JOB_IMAGE:-}
+    ports:
+      - "127.0.0.1:8765:8765"
+    volumes:
+      - ./state:/app/state
+      - ./researcher_data:/app/researcher_data:ro
+      - ./scaffold:/app/scaffold
+      - ./research:/app/research
+      - ./evolution:/app/evolution
+      - ./tools:/app/tools
+      - ./roles:/app/roles
+      - ./prompts:/app/prompts
+      - ./api:/app/api
+      - ./bin:/app/bin
+      - ./coscientist_cli:/app/coscientist_cli
+      - ./tests:/app/tests
+      - ./worktrees:/app/worktrees
+      - ./.git:/app/.git
+      # ui3 (default UI) — built SPA served by the API at "/"
+      - ./ui3/dist:/app/ui3/dist:ro
+
+  # Legacy Streamlit UI — no longer the default; ui3 is served by the API.
+  coscientist-ui:
+    image: ${USER}_coscientist:dev
+    container_name: ${USER}_coscientist-local-ui
+    env_file: .env
+    environment:
+      COSCIENTIST_ROOT: /app
+      COSCIENTIST_API_URL: http://coscientist-api:8765
+    ports:
+      - "127.0.0.1:8501:8501"
+    depends_on:
+      - coscientist-api
+    volumes:
+      - ./state:/app/state
+      - ./researcher_data:/app/researcher_data:ro
+      - ./ui:/app/ui
+      - ./.streamlit:/app/.streamlit:ro
+    command: ["streamlit", "run", "ui/app.py", "--server.port", "8501", "--server.address", "0.0.0.0"]
