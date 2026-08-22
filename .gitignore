@@ -4,6 +4,8 @@ __pycache__/
 .venv/
 .env
 .env.local
+docker-compose.override.yml
+CREDENTIALS.local.md
 
 /state/
 worktrees/
