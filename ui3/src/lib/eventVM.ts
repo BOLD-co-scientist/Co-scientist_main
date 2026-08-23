@@ -1,6 +1,11 @@
 import type { Ev } from "./types";
 import { actorColor, actorGlyph, actorLabel, timeOf } from "./format";
 
+// A tool call's outcome (from a tool.result event), paired to its tool.use by
+// `ref`, plus whether the timeline is live (so a resultless call can pulse).
+export type ToolResult = { summary: string; full: string; isError: boolean };
+export type VMCtx = { results?: Map<string, ToolResult>; live?: boolean };
+
 // Maps a raw event record to a view model the timeline can render. This is the
 // trickiest, most reusable piece of the port — keep it pure and total so every
 // `kind` in the taxonomy (brief §4.D) renders something legible and no record
@@ -30,6 +35,8 @@ export type EventVM =
       arg: string; // the key argument on one line (path, query, script intent)
       full: string; // full input, revealed on expand
       continuation: boolean; // prev row was the same tool+actor → render tighter
+      result?: ToolResult; // outcome, once its tool.result has arrived
+      running: boolean; // live + no result yet → pulse
     }
   | { variant: "dispatch"; id: string; time: string; actorColor: string; actorLabel: string; target: string; body: string }
   | { variant: "hitl"; id: string; time: string; title: string; body: string }
@@ -188,7 +195,9 @@ function describeTool(toolName: string, raw: string): { verb: string; arg: strin
     case "fs_write_workspace":
       return { verb: "Write", arg: S("path") || S("file") || firstStrField(), full };
     case "py_exec":
-      return { verb: "Run", arg: pySummary(S("code") || raw), full: S("code") || full };
+      // Prefer the agent-authored intent (semantic, like CC's Bash description);
+      // fall back to a heuristic summary of the code.
+      return { verb: "Run", arg: S("intent") || pySummary(S("code") || raw), full: S("code") || full };
     case "memory":
       return { verb: "Memory", arg: firstLine(S("query") || S("text") || S("key")) || firstStrField(), full };
     case "deep_research":
@@ -206,11 +215,14 @@ function describeTool(toolName: string, raw: string): { verb: string; arg: strin
         full,
       };
     default:
-      return { verb: clean, arg: firstStrField(), full };
+      // Built-in tools (Read/Edit/Write/Bash…) we can't add an intent to, but
+      // several (Bash, Task) carry a native `description` — prefer it, else the
+      // first meaningful field (usually a path).
+      return { verb: clean, arg: firstLine(S("description")) || firstStrField(), full };
   }
 }
 
-export function toVM(e: Ev, prev?: Ev): EventVM {
+export function toVM(e: Ev, prev?: Ev, ctx?: VMCtx): EventVM {
   const time = timeOf(e.ts);
   const showActor = !prev || prev.actor !== e.actor;
   const s = (k: string) => (e as Record<string, unknown>)[k] as string | undefined;
@@ -245,6 +257,10 @@ export function toVM(e: Ev, prev?: Ev): EventVM {
       prev.kind === e.kind &&
       prev.actor === e.actor &&
       cleanTool((prev as Record<string, unknown>).tool as string ?? "") === cleanTool(rawTool);
+    const ref = s("ref");
+    const result = ref ? ctx?.results?.get(ref) : undefined;
+    // Still-running iff the timeline is live and no tool.result has landed yet.
+    const running = e.kind === "tool.use" && !result && !!ctx?.live;
     return {
       variant: "tool",
       id: e.id,
@@ -256,6 +272,8 @@ export function toVM(e: Ev, prev?: Ev): EventVM {
       arg,
       full,
       continuation,
+      result,
+      running,
     };
   }
 

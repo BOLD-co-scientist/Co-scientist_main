@@ -22,16 +22,18 @@ export default function EventItem({ vm }: { vm: EventVM }) {
 
   if (vm.variant === "tool") {
     // Claude-Code-style action line: a compact, borderless row — actor glyph
-    // (our multi-agent identity), a bold verb, the key argument dimmed, expand
-    // to see full input. Continuation rows (same tool+actor) drop the glyph so a
-    // run of calls reads as one grouped block.
+    // (our multi-agent identity), a bold verb, the key argument dimmed, then the
+    // call's outcome (✓/✗ + one-line result) once it lands. While it's still
+    // running the glyph pulses. Expand shows the full input and result.
+    // Continuation rows (same tool+actor) drop the glyph so a run reads as a block.
+    const res = vm.result;
     return (
       <div style={{ margin: vm.continuation ? "1px 0 1px 6px" : "3px 0 1px 6px", animation: "fade .25s ease" }}>
         <button
           onClick={() => setOpen((o) => !o)}
           style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", textAlign: "left", padding: "3px 8px", background: open ? "var(--bg1)" : "transparent", border: "none", borderRadius: 6 }}
         >
-          <span style={{ width: 14, flex: "0 0 auto", fontFamily: "var(--mono)", fontSize: 10.5, color: vm.actorColor, textAlign: "center" }}>
+          <span style={{ width: 14, flex: "0 0 auto", fontFamily: "var(--mono)", fontSize: 10.5, color: vm.actorColor, textAlign: "center", animation: vm.running ? "pulse 1.4s infinite" : undefined }}>
             {vm.continuation ? "" : vm.glyph}
           </span>
           <span style={{ fontFamily: "var(--mono)", fontSize: 12, fontWeight: 600, color: "var(--hi)", flex: "0 0 auto" }}>{vm.verb}</span>
@@ -41,12 +43,29 @@ export default function EventItem({ vm }: { vm: EventVM }) {
             </span>
           )}
           <span style={{ flex: vm.arg ? "0 0 auto" : 1 }} />
+          {vm.running && (
+            <span style={{ fontFamily: "var(--mono)", fontSize: 10.5, color: "var(--accent)", animation: "pulse 1.4s infinite" }}>running…</span>
+          )}
+          {res && (
+            <span style={{ display: "flex", alignItems: "center", gap: 5, flex: "0 1 auto", minWidth: 0, maxWidth: "42%" }}>
+              <span style={{ fontSize: 11, color: res.isError ? "var(--err)" : "var(--ok)", flex: "0 0 auto" }}>{res.isError ? "✗" : "✓"}</span>
+              {res.summary && (
+                <span style={{ fontFamily: "var(--mono)", fontSize: 11.5, color: "var(--lo)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{res.summary}</span>
+              )}
+            </span>
+          )}
           <span style={{ fontFamily: "var(--mono)", fontSize: 10.5, color: "var(--lo)" }}>{vm.time}</span>
           <span style={{ color: "var(--lo)", fontSize: 10, flex: "0 0 auto" }}>{open ? "▾" : "▸"}</span>
         </button>
-        {open && vm.full && (
-          <div style={{ margin: "2px 0 0 22px", padding: "8px 11px", background: "var(--bg1)", border: "1px solid var(--border)", borderRadius: 7, fontFamily: "var(--mono)", fontSize: 11.5, color: "var(--mid)", whiteSpace: "pre-wrap", lineHeight: 1.5, overflowX: "auto" }}>
-            {vm.full}
+        {open && (vm.full || res) && (
+          <div style={{ margin: "2px 0 0 22px", padding: "8px 11px", background: "var(--bg1)", border: "1px solid var(--border)", borderRadius: 7, fontFamily: "var(--mono)", fontSize: 11.5, color: "var(--mid)", lineHeight: 1.5, overflowX: "auto" }}>
+            {vm.full && <div style={{ whiteSpace: "pre-wrap" }}>{vm.full}</div>}
+            {res && (res.full || res.summary) && (
+              <div style={{ marginTop: vm.full ? 8 : 0, paddingTop: vm.full ? 8 : 0, borderTop: vm.full ? "1px solid var(--border)" : undefined }}>
+                <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: ".06em", color: res.isError ? "var(--err)" : "var(--lo)", marginBottom: 4 }}>{res.isError ? "ERROR" : "RESULT"}</div>
+                <div style={{ whiteSpace: "pre-wrap", color: res.isError ? "var(--err)" : "var(--mid)" }}>{res.full || res.summary}</div>
+              </div>
+            )}
           </div>
         )}
       </div>

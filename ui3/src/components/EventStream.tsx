@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useApp } from "../state/store";
 import type { Ev } from "../lib/types";
-import { cleanTool, isSystemNoise, toVM } from "../lib/eventVM";
+import { cleanTool, isSystemNoise, toVM, type ToolResult } from "../lib/eventVM";
 import EventItem from "./EventItem";
 import ToolGroup from "./ToolGroup";
 import Composer from "./Composer";
@@ -60,9 +60,26 @@ export default function EventStream() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  // Pair each tool.result to its tool.use via `ref`; tool.result rows never show
+  // on their own — they surface inside the action row / group they belong to.
+  const results = useMemo(() => {
+    const m = new Map<string, ToolResult>();
+    for (const e of events) {
+      if (e.kind !== "tool.result") continue;
+      const r = e as Record<string, unknown>;
+      const ref = r.ref as string | undefined;
+      if (ref) m.set(ref, { summary: (r.summary as string) ?? "", full: (r.detail as string) ?? "", isError: !!r.is_error });
+    }
+    return m;
+  }, [events]);
+  const live = !!active?.running && !active?.blocked;
+  const ctx = useMemo(() => ({ results, live }), [results, live]);
+
   const hiddenCount = useMemo(() => events.filter(isSystemNoise).length, [events]);
   const units = useMemo(() => {
-    const visible = showSystem ? events : events.filter((e) => !isSystemNoise(e));
+    const visible = (showSystem ? events : events.filter((e) => !isSystemNoise(e))).filter(
+      (e) => e.kind !== "tool.result",
+    );
     return buildUnits(visible);
   }, [events, showSystem]);
 
@@ -166,9 +183,9 @@ export default function EventStream() {
       >
         {units.map((u) =>
           u.kind === "group" ? (
-            <ToolGroup key={u.items[0].id} items={u.items} prev={u.prev} />
+            <ToolGroup key={u.items[0].id} items={u.items} prev={u.prev} ctx={ctx} />
           ) : (
-            <EventItem key={u.e.id} vm={toVM(u.e, u.prev)} />
+            <EventItem key={u.e.id} vm={toVM(u.e, u.prev, ctx)} />
           ),
         )}
         {(hiddenCount > 0 || showSystem) && (
