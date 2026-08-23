@@ -1,13 +1,70 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useApp } from "../state/store";
-import { toVM } from "../lib/eventVM";
+import type { Ev } from "../lib/types";
+import { cleanTool, isSystemNoise, toVM } from "../lib/eventVM";
 import EventItem from "./EventItem";
+import ToolGroup from "./ToolGroup";
 import Composer from "./Composer";
+
+// Fold consecutive same-tool, same-actor tool.use runs (>=2) into one group;
+// everything else stays a standalone unit. Each unit carries the previous
+// VISIBLE event so actor/continuation styling is relative to what's shown.
+type Unit =
+  | { kind: "single"; e: Ev; prev?: Ev }
+  | { kind: "group"; items: Ev[]; prev?: Ev };
+
+function buildUnits(evs: Ev[]): Unit[] {
+  const units: Unit[] = [];
+  let i = 0;
+  while (i < evs.length) {
+    const e = evs[i];
+    const prev = evs[i - 1];
+    if (e.kind === "tool.use") {
+      const tool = cleanTool((e as Record<string, unknown>).tool as string ?? "");
+      let j = i + 1;
+      while (
+        j < evs.length &&
+        evs[j].kind === "tool.use" &&
+        evs[j].actor === e.actor &&
+        cleanTool((evs[j] as Record<string, unknown>).tool as string ?? "") === tool
+      )
+        j++;
+      if (j - i >= 2) units.push({ kind: "group", items: evs.slice(i, j), prev });
+      else units.push({ kind: "single", e, prev });
+      i = j;
+    } else {
+      units.push({ kind: "single", e, prev });
+      i++;
+    }
+  }
+  return units;
+}
 
 export default function EventStream() {
   const { active, status, events, hasPending, pending, setRightTab, stop, workingHyp, clearWorkingHyp, setMainView, draftNew } = useApp();
   const scRef = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
+  // Default timeline hides low-signal system events (see isSystemNoise). ⌘/Ctrl-O
+  // reveals them, mirroring Claude Code's Ctrl-O transcript view — a shortcut,
+  // not an on-screen switch.
+  const [showSystem, setShowSystem] = useState(false);
+
+  useEffect(() => {
+    const onKey = (ev: KeyboardEvent) => {
+      if ((ev.metaKey || ev.ctrlKey) && (ev.key === "o" || ev.key === "O")) {
+        ev.preventDefault();
+        setShowSystem((s) => !s);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  const hiddenCount = useMemo(() => events.filter(isSystemNoise).length, [events]);
+  const units = useMemo(() => {
+    const visible = showSystem ? events : events.filter((e) => !isSystemNoise(e));
+    return buildUnits(visible);
+  }, [events, showSystem]);
 
   useEffect(() => {
     const el = scRef.current;
@@ -107,9 +164,20 @@ export default function EventStream() {
         }}
         style={{ flex: 1, overflowY: "auto", padding: "18px 24px 12px" }}
       >
-        {events.map((e, i) => (
-          <EventItem key={e.id} vm={toVM(e, events[i - 1])} />
-        ))}
+        {units.map((u) =>
+          u.kind === "group" ? (
+            <ToolGroup key={u.items[0].id} items={u.items} prev={u.prev} />
+          ) : (
+            <EventItem key={u.e.id} vm={toVM(u.e, u.prev)} />
+          ),
+        )}
+        {(hiddenCount > 0 || showSystem) && (
+          <div style={{ margin: "10px 0 2px", textAlign: "center", fontFamily: "var(--mono)", fontSize: 10.5, color: "var(--lo)" }}>
+            {showSystem
+              ? `showing all events · ${"⌘"}O to hide system`
+              : `${hiddenCount} system event${hiddenCount === 1 ? "" : "s"} hidden · ${"⌘"}O to show`}
+          </div>
+        )}
         <div style={{ height: 6 }} />
       </div>
 

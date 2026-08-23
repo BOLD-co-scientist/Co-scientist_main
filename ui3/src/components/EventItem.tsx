@@ -21,28 +21,32 @@ export default function EventItem({ vm }: { vm: EventVM }) {
   }
 
   if (vm.variant === "tool") {
+    // Claude-Code-style action line: a compact, borderless row — actor glyph
+    // (our multi-agent identity), a bold verb, the key argument dimmed, expand
+    // to see full input. Continuation rows (same tool+actor) drop the glyph so a
+    // run of calls reads as one grouped block.
     return (
-      <div style={{ margin: "5px 0 5px 6px", animation: "fade .25s ease" }}>
+      <div style={{ margin: vm.continuation ? "1px 0 1px 6px" : "3px 0 1px 6px", animation: "fade .25s ease" }}>
         <button
           onClick={() => setOpen((o) => !o)}
-          style={{ display: "flex", alignItems: "center", gap: 9, width: "100%", textAlign: "left", padding: "7px 11px", background: "var(--bg1)", border: "1px solid var(--border)", borderRadius: 8 }}
+          style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", textAlign: "left", padding: "3px 8px", background: open ? "var(--bg1)" : "transparent", border: "none", borderRadius: 6 }}
         >
-          <span style={{ fontFamily: "var(--mono)", fontSize: 11, color: vm.actorColor, flex: "0 0 auto" }}>{vm.glyph}</span>
-          <span style={{ fontSize: 12.5, color: "var(--mid)", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            {vm.actorLabel} used <span style={{ fontFamily: "var(--mono)", color: "var(--hi)" }}>{vm.tool}</span>
-            {vm.summary && (
-              <span style={{ color: "var(--lo)" }}>
-                {" · "}
-                <span style={{ fontFamily: "var(--mono)" }}>{vm.summary}</span>
-              </span>
-            )}
+          <span style={{ width: 14, flex: "0 0 auto", fontFamily: "var(--mono)", fontSize: 10.5, color: vm.actorColor, textAlign: "center" }}>
+            {vm.continuation ? "" : vm.glyph}
           </span>
+          <span style={{ fontFamily: "var(--mono)", fontSize: 12, fontWeight: 600, color: "var(--hi)", flex: "0 0 auto" }}>{vm.verb}</span>
+          {vm.arg && (
+            <span style={{ fontFamily: "var(--mono)", fontSize: 12, color: "var(--mid)", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {vm.arg}
+            </span>
+          )}
+          <span style={{ flex: vm.arg ? "0 0 auto" : 1 }} />
           <span style={{ fontFamily: "var(--mono)", fontSize: 10.5, color: "var(--lo)" }}>{vm.time}</span>
-          <span style={{ color: "var(--lo)", fontSize: 10, flex: "0 0 auto" }}>{open ? "\u25BE" : "\u25B8"}</span>
+          <span style={{ color: "var(--lo)", fontSize: 10, flex: "0 0 auto" }}>{open ? "▾" : "▸"}</span>
         </button>
-        {open && vm.arg && (
-          <div style={{ margin: "4px 0 0", padding: "9px 12px", background: "var(--bg1)", border: "1px solid var(--border)", borderRadius: 8, fontFamily: "var(--mono)", fontSize: 11.5, color: "var(--mid)", whiteSpace: "pre-wrap", lineHeight: 1.5 }}>
-            {vm.arg}
+        {open && vm.full && (
+          <div style={{ margin: "2px 0 0 22px", padding: "8px 11px", background: "var(--bg1)", border: "1px solid var(--border)", borderRadius: 7, fontFamily: "var(--mono)", fontSize: 11.5, color: "var(--mid)", whiteSpace: "pre-wrap", lineHeight: 1.5, overflowX: "auto" }}>
+            {vm.full}
           </div>
         )}
       </div>
@@ -67,7 +71,7 @@ export default function EventItem({ vm }: { vm: EventVM }) {
     return (
       <div style={{ margin: "9px 0 9px 6px", padding: "12px 14px", background: "var(--warn-soft)", border: "1px solid var(--warn)", borderRadius: 10, animation: "fade .25s ease" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11, fontWeight: 600, color: "var(--warn)", textTransform: "uppercase", letterSpacing: ".06em" }}>
-          <span>{"\u23F8"} human-in-the-loop</span>
+          <span>{"⏸"} human-in-the-loop</span>
           <span style={{ fontFamily: "var(--mono)", textTransform: "none", letterSpacing: 0, color: "var(--lo)" }}>{vm.time}</span>
         </div>
         <div style={{ marginTop: 6, fontSize: 13.5, color: "var(--hi)" }}>{vm.title}</div>
