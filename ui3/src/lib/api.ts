@@ -112,17 +112,102 @@ function mapSession(r: Raw): SessionSummary {
 function mapPending(r: Raw): HitlPending {
   // scaffold/hitl.py writes {id, ts, kind, summary, payload, decision}.
   const payload = r.payload;
-  let detail: string | undefined;
-  if (typeof payload === "string") detail = payload;
-  else if (payload != null) detail = JSON.stringify(payload, null, 2);
-  return {
+  const kind = (r.kind as string) ?? undefined;
+  const base = {
     request_id: (r.id as string) ?? "",
-    title: (r.summary as string) ?? (r.kind as string) ?? "Approval required",
-    action: (r.kind as string) ?? undefined,
-    detail,
+    title: (r.summary as string) ?? kind ?? "Approval required",
     requester: (r.requester as string) ?? undefined,
     created: (r.ts as string) ?? undefined,
   };
+  const p =
+    payload && typeof payload === "object" && !Array.isArray(payload)
+      ? (payload as Record<string, unknown>)
+      : null;
+  // First non-empty string field from the payload.
+  const str = (k: string): string | undefined => {
+    const v = p?.[k];
+    return typeof v === "string" && v.trim() ? v : undefined;
+  };
+
+  // Every HITL kind's payload is structured; dumping it as JSON re-escapes the
+  // prose (and diffs / skill files) the human actually needs to read, and
+  // "What will happen" ends up showing a mechanical `kind`. So per kind, pull
+  // the human-readable field, render it as markdown, and write a plain-language
+  // action. Backends: research/runtime.py (checkpoint), scaffold/system_tools.py
+  // (ask), evolution/tools/propose_merge.py (evolution_merge), scaffold/skills.py
+  // (skill_proposal).
+  switch (kind) {
+    case "checkpoint": {
+      const dt = str("deferred_tool");
+      const deferred = dt ? cleanToolName(dt) : "";
+      const count = typeof p?.event_count === "number" ? (p.event_count as number) : undefined;
+      return {
+        ...base,
+        action: deferred
+          ? `The agent paused before calling ${deferred}. Review the progress below, then Approve to let it continue or Reject to redirect.`
+          : `The agent paused for your review. Approve to let it continue or Reject to redirect.`,
+        detail: str("agent_summary"),
+        detailMarkdown: true,
+        meta: count != null ? `${count} events since last checkpoint` : undefined,
+      };
+    }
+    case "ask":
+      return {
+        ...base,
+        action: "The agent needs your input before it can continue.",
+        detail: str("details"),
+        detailMarkdown: true,
+        requester: str("asker") ?? base.requester,
+      };
+    case "evolution_merge": {
+      const branch = str("branch");
+      const diff = str("diff_preview");
+      const strict = p?.strict === true;
+      // Rationale as prose; the diff inside a fenced block so the markdown
+      // renderer shows it monospace with its own horizontal scroll.
+      const detail = [str("rationale"), diff ? "```diff\n" + diff + "\n```" : ""]
+        .filter(Boolean)
+        .join("\n\n");
+      return {
+        ...base,
+        action: branch
+          ? `The evolution agent wants to merge ${branch} into main.`
+          : "The evolution agent wants to merge its changes into main.",
+        detail: detail || undefined,
+        detailMarkdown: true,
+        meta: [branch, strict ? "strict · smoke-gated" : null].filter(Boolean).join(" · ") || undefined,
+      };
+    }
+    case "skill_proposal": {
+      const name = str("name");
+      const overwrite = p?.overwrite === true;
+      const detail = [str("description"), str("skill_md")].filter(Boolean).join("\n\n");
+      return {
+        ...base,
+        action: name
+          ? `The agent wants to save a reusable skill${overwrite ? " (overwriting an existing one)" : ""}: ${name}.`
+          : "The agent wants to save a reusable skill.",
+        detail: detail || undefined,
+        detailMarkdown: true,
+        meta: overwrite ? "overwrites an existing skill" : undefined,
+      };
+    }
+  }
+
+  // Fallback: string payloads pass through; unknown object payloads still show
+  // as JSON (a raw blob beats dropped data), but never surface a snake_case kind
+  // as the action.
+  let detail: string | undefined;
+  if (typeof payload === "string") detail = payload;
+  else if (payload != null) detail = JSON.stringify(payload, null, 2);
+  return { ...base, action: kind ? kind.replace(/[._]/g, " ") : undefined, detail };
+}
+
+// SDK MCP tool names arrive as "mcp__<server>__<method>"; show just the server
+// (the part a human cares about), mirroring eventVM.cleanTool.
+function cleanToolName(name: string): string {
+  const m = /^mcp__([^_].*?)__[^_].*$/.exec(name);
+  return m ? m[1] : name;
 }
 
 function mapHealth(r: Raw): LibraryHealth {

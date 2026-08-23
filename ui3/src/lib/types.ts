@@ -72,6 +72,11 @@ export interface HitlPending {
   title: string;
   action?: string;
   detail?: string;
+  // When set, `detail` is markdown (e.g. a checkpoint's agent summary) and
+  // should be rendered as such rather than as a raw mono/JSON blob.
+  detailMarkdown?: boolean;
+  // Optional one-line context shown under the action (e.g. "20 events").
+  meta?: string;
   created?: string;
 }
 

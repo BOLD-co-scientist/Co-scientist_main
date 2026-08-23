@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { EventVM } from "../lib/eventVM";
+import Markdown from "./Markdown";
 
 export default function EventItem({ vm }: { vm: EventVM }) {
   const [open, setOpen] = useState(false);
@@ -111,7 +112,15 @@ export default function EventItem({ vm }: { vm: EventVM }) {
           {vm.label && (
             <div style={{ fontSize: 11, fontWeight: 600, color: "var(--lo)", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 5 }}>{vm.label}</div>
           )}
-          <div style={{ fontSize: 13.5, color: "var(--hi)", whiteSpace: "pre-wrap", lineHeight: 1.55 }}>{vm.body}</div>
+          {vm.tone === "human" ? (
+            // Human-typed text is plain; keep it verbatim rather than parsing
+            // stray *asterisks* or #hashes as markdown.
+            <div style={{ fontSize: 13.5, color: "var(--hi)", whiteSpace: "pre-wrap", lineHeight: 1.55 }}>{vm.body}</div>
+          ) : (
+            // Agent output is markdown — render it so reports/summaries in the
+            // timeline read as prose, not raw ## / ** / | table syntax.
+            <Markdown text={vm.body} style={{ fontSize: 13.5, color: "var(--hi)" }} />
+          )}
         </div>
       </div>
     </div>

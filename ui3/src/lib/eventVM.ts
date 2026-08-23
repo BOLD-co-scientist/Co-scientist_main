@@ -196,14 +196,21 @@ export function toVM(e: Ev, prev?: Ev): EventVM {
     };
   }
 
-  if (e.kind === "hitl.pending" || e.kind === "ask")
+  if (e.kind === "hitl.pending" || e.kind === "ask") {
+    // hitl.pending events carry the request `summary` (the actual question /
+    // what's being approved) — show it here instead of a generic placeholder so
+    // the timeline says WHAT is pending, not just that something is.
+    const q = firstStr("summary", "text", "detail");
     return {
       variant: "hitl",
       id: e.id,
       time,
-      title: "The agent is waiting for your approval.",
-      body: "A gated action is pending — see the approval panel on the right.",
+      title: q ?? "The agent is waiting for your approval.",
+      body: q
+        ? "Approve or reject in the approval panel on the right."
+        : "A gated action is pending — see the approval panel on the right.",
     };
+  }
 
   if (e.kind === "hitl.answer") {
     const decision = s("decision");
