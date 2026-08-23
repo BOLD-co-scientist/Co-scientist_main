@@ -368,6 +368,10 @@ export function toVM(e: Ev, prev?: Ev, ctx?: VMCtx): EventVM {
   };
   if (e.kind === "research.requested")
     return { ...base, label: "Research task", body: s("task") ?? "" };
+  // The human's evolution command — echo it as their message bubble so the
+  // conversation opens with what was asked, not a bare spine line.
+  if (e.kind === "evolution.requested")
+    return { ...base, tone: "human", label: "Evolution command", body: s("command") ?? "" };
   if (e.kind === "research.complete")
     return { ...base, tone: "ok", label: "Research complete", body: firstStr("summary", "text") ?? "" };
 

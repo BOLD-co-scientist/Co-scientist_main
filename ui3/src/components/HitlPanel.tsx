@@ -1,9 +1,16 @@
 import { useState } from "react";
 import { useApp } from "../state/store";
 import Markdown from "./Markdown";
+import type { HitlPending } from "../lib/types";
 
-export default function HitlPanel() {
-  const { pending, answer } = useApp();
+type AnswerFn = (requestId: string, decision: "approve" | "reject", note?: string) => Promise<void>;
+
+// Defaults to the research session's pending/answer, but the Evolution tab passes
+// its own (evoPending / answerEvo) so the same approval UI serves both channels.
+export default function HitlPanel({ pending: pendingProp, answer: answerProp }: { pending?: HitlPending[]; answer?: AnswerFn } = {}) {
+  const app = useApp();
+  const pending = pendingProp ?? app.pending;
+  const answer = answerProp ?? app.answer;
   const [note, setNote] = useState("");
 
   if (pending.length === 0) {

@@ -48,6 +48,15 @@ MAX_TURNS = int(os.environ.get("COSCIENTIST_MAX_TURNS", "80"))
 
 CHECKPOINT_EVENT_INTERVAL = 10
 
+# Evolution merge guard: never apply a merge into the user root while a research
+# session is running — wait until all of them go idle, so code never changes under
+# a running turn. Modeled on Claude Code's Monitor: poll-until-idle on an interval
+# with a long backstop, and DON'T force on timeout (the human stops sessions to
+# unblock). Cross-process signal = per-session marker files under
+# state/control/research_active/ (see api.server). 0 disables the wait.
+EVOLUTION_MERGE_WAIT_S = int(os.environ.get("COSCIENTIST_EVOLUTION_MERGE_WAIT_S", "3600"))
+EVOLUTION_MERGE_POLL_S = int(os.environ.get("COSCIENTIST_EVOLUTION_MERGE_POLL_S", "5"))
+
 # R12 long-job runner. The spool is a shared directory both the container and the
 # host-side spooler daemon see (default: under the state mount, so no extra
 # mount). In the container, point COSCIENTIST_SPOOL_DIR at the GLOBAL state mount

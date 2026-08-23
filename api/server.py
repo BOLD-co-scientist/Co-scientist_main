@@ -196,6 +196,23 @@ def _monitor_key(ctx: UserContext, sid: str) -> tuple[str, str]:
     return (ctx.user.user_id, sid)
 
 
+def _research_active_dir(ctx: UserContext) -> Path:
+    # Cross-process signal (the evolution subprocess can't read _RUNNING): one
+    # marker file per running research session, holding its PID so the evolution
+    # merge guard can verify liveness and ignore stale markers from a crash.
+    return ctx.state / "control" / "research_active"
+
+
+def _mark_research_active(ctx: UserContext, sid: str, pid: int) -> None:
+    d = _research_active_dir(ctx)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / sid).write_text(str(pid), encoding="utf-8")
+
+
+def _clear_research_active(ctx: UserContext, sid: str) -> None:
+    (_research_active_dir(ctx) / sid).unlink(missing_ok=True)
+
+
 async def _monitor_runtime(
     ctx: UserContext, sid: str, proc: "asyncio.subprocess.Process", log_fh
 ) -> None:
@@ -204,6 +221,7 @@ async def _monitor_runtime(
         rc = await proc.wait()
     finally:
         _RUNNING.pop(_monitor_key(ctx, sid), None)
+        _clear_research_active(ctx, sid)
         _clear_stop(ctx, sid)
         try:
             log_fh.close()
@@ -261,6 +279,9 @@ async def _spawn_research(
         stderr=log_fh,
     )
     _RUNNING[_monitor_key(ctx, sid)] = proc
+    # Research only: signals the evolution merge guard to wait. Evolution spawns
+    # deliberately do NOT mark, so a merge never waits on its own subprocess.
+    _mark_research_active(ctx, sid, proc.pid)
     asyncio.create_task(_monitor_runtime(ctx, sid, proc, log_fh))
 
 
