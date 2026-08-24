@@ -196,6 +196,23 @@ def _monitor_key(ctx: UserContext, sid: str) -> tuple[str, str]:
     return (ctx.user.user_id, sid)
 
 
+def _research_active_dir(ctx: UserContext) -> Path:
+    # Cross-process signal (the evolution subprocess can't read _RUNNING): one
+    # marker file per running research session, holding its PID so the evolution
+    # merge guard can verify liveness and ignore stale markers from a crash.
+    return ctx.state / "control" / "research_active"
+
+
+def _mark_research_active(ctx: UserContext, sid: str, pid: int) -> None:
+    d = _research_active_dir(ctx)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / sid).write_text(str(pid), encoding="utf-8")
+
+
+def _clear_research_active(ctx: UserContext, sid: str) -> None:
+    (_research_active_dir(ctx) / sid).unlink(missing_ok=True)
+
+
 async def _monitor_runtime(
     ctx: UserContext, sid: str, proc: "asyncio.subprocess.Process", log_fh
 ) -> None:
@@ -204,6 +221,7 @@ async def _monitor_runtime(
         rc = await proc.wait()
     finally:
         _RUNNING.pop(_monitor_key(ctx, sid), None)
+        _clear_research_active(ctx, sid)
         _clear_stop(ctx, sid)
         try:
             log_fh.close()
@@ -217,6 +235,38 @@ async def _monitor_runtime(
             kind="session.crashed",
             error=f"runtime exited with code {rc}; see state/sessions/{sid}/runtime.log",
         )
+    elif not sid.startswith("evo-") and settings.EVO_REFLECT:
+        # R16: a research turn finished cleanly → kick the read-only reflection
+        # pass in its own detached subprocess so it never delays or blocks the
+        # turn, and stays a separate node from the (heavy) evolution modifier.
+        await _spawn_reflection(ctx, sid)
+
+
+async def _reap_reflection(proc: "asyncio.subprocess.Process", log_fh) -> None:
+    try:
+        await proc.wait()
+    finally:
+        try:
+            log_fh.close()
+        except Exception:
+            pass
+
+
+async def _spawn_reflection(ctx: UserContext, sid: str) -> None:
+    """Kick the R16 reflection runner (read-only) as a detached subprocess.
+    Advisory only — any failure here must never affect the research session."""
+    try:
+        log_fh = open(ctx.session_dir(sid) / "reflect.log", "ab")
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable, "-m", "research.reflect", "--session", sid,
+            cwd=str(ctx.root),
+            env=_runtime_env(ctx),
+            stdout=log_fh,
+            stderr=log_fh,
+        )
+        asyncio.create_task(_reap_reflection(proc, log_fh))
+    except Exception:
+        pass
 
 
 def _read_sdk_session(ctx: UserContext, sid: str) -> str | None:
@@ -261,6 +311,9 @@ async def _spawn_research(
         stderr=log_fh,
     )
     _RUNNING[_monitor_key(ctx, sid)] = proc
+    # Research only: signals the evolution merge guard to wait. Evolution spawns
+    # deliberately do NOT mark, so a merge never waits on its own subprocess.
+    _mark_research_active(ctx, sid, proc.pid)
     asyncio.create_task(_monitor_runtime(ctx, sid, proc, log_fh))
 
 
@@ -423,6 +476,34 @@ def session_events(sid: str, limit: int = 100, ctx: UserContext = Depends(_ctx))
     if limit < 1 or limit > 1000:
         raise HTTPException(400, "limit must be between 1 and 1000")
     return _tail_events(ctx, sid)[-limit:]
+
+
+@app.get("/sessions/{sid}/reflection")
+def session_reflection(sid: str, ctx: UserContext = Depends(_ctx)):
+    """R16: the per-session reflection + evolution proposals, if any. Powers the
+    research-conversation nudge card and the Evolution-tab suggestion cards.
+    Returns empty proposals when no reflection has run (or none was warranted)."""
+    sid = _safe_sid(sid)
+    if not _session_exists(ctx, sid):
+        raise HTTPException(404, "unknown session")
+    rec = read_json(ctx.session_dir(sid) / "reflection.json", default=None)
+    if not isinstance(rec, dict):
+        return {"reflection": "", "proposals": []}
+    return {"reflection": rec.get("reflection", ""), "proposals": rec.get("proposals") or []}
+
+
+@app.post("/sessions/{sid}/reflect")
+async def session_reflect(sid: str, ctx: UserContext = Depends(_ctx)):
+    """Re-run the R16 reflection pass on demand (e.g. the human wants suggestions
+    even though the auto pass was skipped). Fire-and-forget; poll the reflection
+    endpoint / watch for the ``reflection.ready`` event."""
+    sid = _safe_sid(sid)
+    if not _session_exists(ctx, sid):
+        raise HTTPException(404, "unknown session")
+    if sid.startswith("evo-"):
+        raise HTTPException(400, "reflection is for research sessions")
+    await _spawn_reflection(ctx, sid)
+    return {"ok": True, "queued": True}
 
 
 # Subdirs of a session that hold agent-generated, user-facing output.

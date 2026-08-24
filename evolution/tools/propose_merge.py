@@ -3,6 +3,7 @@ blocks until decided, then merges or discards."""
 from __future__ import annotations
 
 import asyncio
+import os
 import subprocess
 import time
 from pathlib import Path
@@ -34,6 +35,70 @@ async def _run_smoke(wt: sandbox.Worktree) -> tuple[bool, str]:
         return False, "smoke timeout"
     body = (out + err).decode("utf-8", errors="replace")
     return proc.returncode == 0, body[-4000:]
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # exists, just not ours to signal
+    except OSError:
+        return False
+    return True
+
+
+def _live_research_sessions() -> list[str]:
+    """Session ids with a live research subprocess, from the marker files
+    api.server writes (one per running research turn, holding its PID). Stale
+    markers (dead PID) are cleaned so a crashed session never blocks forever."""
+    d = settings.STATE / "control" / "research_active"
+    if not d.exists():
+        return []
+    live: list[str] = []
+    for f in sorted(d.glob("*")):
+        try:
+            pid = int((f.read_text(encoding="utf-8").strip() or "0"))
+        except (ValueError, OSError):
+            f.unlink(missing_ok=True)
+            continue
+        if pid > 0 and _pid_alive(pid):
+            live.append(f.name)
+        else:
+            f.unlink(missing_ok=True)
+    return live
+
+
+async def _wait_for_sessions_idle(session_id: str) -> bool:
+    """Hold a merge until NO research session is running for this user, so code
+    never changes under a running turn. Returns True when idle, False on timeout
+    (the caller must NOT merge on False). Modeled on Claude Code's Monitor:
+    poll on an interval with a long backstop, and DON'T force on timeout — the
+    human stops sessions to unblock. Single-directional (evolution waits on
+    research, never the reverse) → no deadlock cycle is possible; stale-marker
+    cleanup + the timeout prevent an indefinite hang."""
+    wait_s = settings.EVOLUTION_MERGE_WAIT_S
+    if wait_s <= 0:
+        return True
+    poll_s = max(1, settings.EVOLUTION_MERGE_POLL_S)
+    waited = 0
+    last_note = -10_000
+    while True:
+        live = _live_research_sessions()
+        if not live:
+            return True
+        if last_note < 0 or waited - last_note >= 30:
+            eventlog.append(
+                session_id, actor="evolution", kind="evolution.note",
+                note=(f"Waiting for {len(live)} research session(s) to finish before "
+                      f"merging: {', '.join(live)}. Stop them to merge now."),
+            )
+            last_note = waited
+        if waited >= wait_s:
+            return False
+        await asyncio.sleep(poll_s)
+        waited += poll_s
 
 
 def make_server(session_id: str, wt: sandbox.Worktree):
@@ -85,6 +150,18 @@ def make_server(session_id: str, wt: sandbox.Worktree):
         )
 
         if decision.get("decision") == "approve":
+            # Guard: never merge into the user root while a research session runs.
+            if not await _wait_for_sessions_idle(session_id):
+                write_json(archive_dir / "decision.json", {"status": "deferred", "reason": "sessions_running"})
+                eventlog.append(
+                    session_id, actor="evolution", kind="evolution.note",
+                    note=("Merge deferred: research session(s) still running after the wait "
+                          "window. Stop them and re-run this evolution to merge. Worktree preserved."),
+                )
+                return {"content": [{"type": "text", "text": (
+                    "DEFERRED: research session(s) still running; merge NOT applied. "
+                    "Stop them, then re-run this evolution. Your worktree is preserved."
+                )}], "isError": True}
             head = sandbox.merge_to_main(wt)
             # Compute revert.patch (reverse diff) for rollback.
             revert = subprocess.check_output(

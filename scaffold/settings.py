@@ -43,10 +43,23 @@ RESEARCHER_DATA = ROOT / "researcher_data"
 MODEL_SUPERVISOR = os.environ.get("COSCIENTIST_MODEL_SUPERVISOR", "claude-opus-4-7")
 MODEL_SUBAGENT = os.environ.get("COSCIENTIST_MODEL_SUBAGENT", "claude-sonnet-4-6")
 MODEL_EVOLUTION = os.environ.get("COSCIENTIST_MODEL_EVOLUTION", "claude-opus-4-7")
+# R16 reflection runs read-only and must reason across evolution directions
+# (not just "add a tool"), so it needs a mid-tier model — cheaper than the
+# supervisor, stronger than the weakest.
+MODEL_REFLECT = os.environ.get("COSCIENTIST_MODEL_REFLECT", "claude-sonnet-4-6")
 
 MAX_TURNS = int(os.environ.get("COSCIENTIST_MAX_TURNS", "80"))
 
 CHECKPOINT_EVENT_INTERVAL = 10
+
+# Evolution merge guard: never apply a merge into the user root while a research
+# session is running — wait until all of them go idle, so code never changes under
+# a running turn. Modeled on Claude Code's Monitor: poll-until-idle on an interval
+# with a long backstop, and DON'T force on timeout (the human stops sessions to
+# unblock). Cross-process signal = per-session marker files under
+# state/control/research_active/ (see api.server). 0 disables the wait.
+EVOLUTION_MERGE_WAIT_S = int(os.environ.get("COSCIENTIST_EVOLUTION_MERGE_WAIT_S", "3600"))
+EVOLUTION_MERGE_POLL_S = int(os.environ.get("COSCIENTIST_EVOLUTION_MERGE_POLL_S", "5"))
 
 # R12 long-job runner. The spool is a shared directory both the container and the
 # host-side spooler daemon see (default: under the state mount, so no extra
@@ -61,6 +74,17 @@ LONGJOB_JOB_IMAGE = os.environ.get("COSCIENTIST_JOB_IMAGE", "")
 # Whether a research turn reflects at its end and may propose saving a reusable
 # workflow as a skill (HITL-gated). Off → no reflection round-trip. See R7.
 SKILL_REFLECTION = os.environ.get("COSCIENTIST_SKILL_REFLECTION", "1") not in ("0", "false", "False", "")
+
+# R16 evolution reflection: at a research turn's clean completion, a read-only
+# reflection pass looks at the whole session + harness inventory and may propose
+# harness evolutions for the human to pick from (see docs/plans/R16-*). It runs
+# only once the session has produced a deliverable, and re-runs on a later turn
+# only when that turn added real new work — EVO_REFLECT_MIN_TOOLCALLS is the
+# minimum NEW tool calls since the last reflection (delta), so chatty/clarifying
+# turns don't burn a call or clobber the prior reflection. The LLM does the real
+# judging across directions; empty proposals → no reminder fires.
+EVO_REFLECT = os.environ.get("COSCIENTIST_EVO_REFLECT", "1") not in ("0", "false", "False", "")
+EVO_REFLECT_MIN_TOOLCALLS = int(os.environ.get("COSCIENTIST_EVO_REFLECT_MIN_TOOLCALLS", "2"))
 
 PYEXEC_CPU_SECONDS = int(os.environ.get("COSCIENTIST_PYEXEC_CPU_SECONDS", "60"))
 PYEXEC_MEM_MB = int(os.environ.get("COSCIENTIST_PYEXEC_MEM_MB", "1024"))

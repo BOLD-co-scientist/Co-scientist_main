@@ -273,6 +273,8 @@ export function createMockApi(): Api {
     libraryHealth: () => delay({ used_bytes: 2_878_000_000, free_bytes: 442_000_000_000, max_bytes: 445_000_000_000 }),
 
     getPending: (sid) => delay(clone(pending[sid] ?? [])),
+    getReflection: (sid) => delay({ session_id: sid, reflection: "", proposals: [] }),
+    reflect: () => delay({ ok: true }),
     answerHitl: (sid, _req, decision) => {
       const s = find(sid);
       pending[sid] = [];

@@ -15,6 +15,7 @@ R1, R5, R2 are being implemented in **parallel worktrees**. See [docs/plans/PARA
 | **R1** | Replayable event log (telemetry + cassette replay) | Planned | [R1-replay-event-log.md](docs/plans/R1-replay-event-log.md) | `feat/R1-replay` | `../coscientist-R1` |
 | **R5** | Cost ledger + tier routing + caching | Planned | [R5-cost-tier-routing.md](docs/plans/R5-cost-tier-routing.md) | `feat/R5-cost` | `../coscientist-R5` |
 | **R2** | Reflection → cross-session lessons buffer | Planned | [R2-reflection-lessons.md](docs/plans/R2-reflection-lessons.md) | `feat/R2-reflection` | `../coscientist-R2` |
+| **R16** | Evolution reflection & suggestion trigger (human-gated RHI loop) — session end → reflect → propose evolutions → human picks → existing evolution | Planned | [R16-evo-reflection-trigger.md](docs/plans/R16-evo-reflection-trigger.md) | `feat/R16-evo-reflection` | — |
 
 ## 🟡 Next (queued, plans not yet drafted)
 

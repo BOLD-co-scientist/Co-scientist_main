@@ -20,6 +20,7 @@ import type {
   LibraryFile,
   LibraryHealth,
   MemoryHit,
+  Reflection,
   RoleSummary,
   SessionFile,
   SessionSummary,
@@ -28,6 +29,9 @@ import type {
 const TOKEN_KEY = "csk_token";
 const THEME_KEY = "cs_theme";
 const HYP_KEY = "cs_active_hyp"; // persisted id of the open hypothesis session
+const EVO_KEY = "cs_active_evo"; // persisted id of the open evolution session
+const REFL_DISMISS_KEY = "cs_refl_dismissed"; // sids whose reflection nudge was closed
+const isEvo = (sid: string) => sid.startsWith("evo-");
 const USE_MOCK = import.meta.env.VITE_MOCK === "1";
 
 type MainView = "session" | "hypothesis" | "evolution";
@@ -72,6 +76,25 @@ interface AppCtx {
   send: (text: string) => Promise<boolean>;
   stop: () => Promise<void>;
   answer: (requestId: string, decision: "approve" | "reject", note?: string) => Promise<void>;
+
+  // ---- evolution channel: independent session + stream, so it runs alongside
+  // (and never disturbs) an active research session. Its log lives on the backend
+  // under state/sessions/<evo-sid>; these are just the client-side mirror.
+  evoActiveId: string | null;
+  evoEvents: Ev[];
+  evoPending: HitlPending[];
+  evoRunning: boolean;
+  evolutionCommand: string;
+  setEvolutionCommand: (command: string) => void;
+  startEvolution: (command: string) => Promise<void>;
+  answerEvo: (requestId: string, decision: "approve" | "reject", note?: string) => Promise<void>;
+
+  // ---- R16: reflection for the active research session. `reflection` seeds the
+  // Evolution-tab suggestion cards; `reflectionNudge` is the same but null once
+  // dismissed / when there's nothing to suggest (drives the in-conversation card).
+  reflection: Reflection | null;
+  reflectionNudge: Reflection | null;
+  dismissReflection: () => void;
 
   files: SessionFile[];
   loadFiles: () => void;
@@ -133,6 +156,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [pending, setPending] = useState<HitlPending[]>([]);
   const [draftNew, setDraftNew] = useState(false); // "New session" compose view, no backend session yet
   const [queue, setQueue] = useState<string[]>([]); // messages queued while the agent is busy
+
+  const [reflection, setReflection] = useState<Reflection | null>(null);
+  // Per-session nudge dismissals, persisted so a closed card stays closed.
+  const [dismissed, setDismissed] = useState<Set<string>>(
+    () => new Set(JSON.parse(localStorage.getItem(REFL_DISMISS_KEY) || "[]") as string[]),
+  );
+
+  const [evoActiveId, setEvoActiveId] = useState<string | null>(null);
+  const [evoEvents, setEvoEvents] = useState<Ev[]>([]);
+  const [evoPending, setEvoPending] = useState<HitlPending[]>([]);
+  const [evolutionCommand, setEvolutionCommand] = useState("");
+  const evoStreamRef = useRef<StreamHandle | null>(null);
+  const evoActiveIdRef = useRef<string | null>(null);
+  evoActiveIdRef.current = evoActiveId;
+  const evoEventsRef = useRef<Ev[]>([]);
+  evoEventsRef.current = evoEvents;
 
   const [mainView, setMainView] = useState<MainView>("session");
   const [rightTab, setRightTab] = useState<RightTab>("hitl");
@@ -265,9 +304,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       try {
         const list = await api.listSessions();
         setSessions(list);
-        if (!activeIdRef.current && list.length) {
-          const blocked = list.find((s) => s.blocked);
-          setActiveId((blocked ?? list[0]).session_id);
+        const research = list.filter((s) => !isEvo(s.session_id));
+        if (!activeIdRef.current && research.length) {
+          const blocked = research.find((s) => s.blocked);
+          setActiveId((blocked ?? research[0]).session_id);
+        }
+        // Restore/adopt an evolution session: persisted id if still present, else
+        // the newest evo-* session on the server.
+        if (!evoActiveIdRef.current) {
+          const stored = localStorage.getItem(EVO_KEY);
+          const evo = list.filter((s) => isEvo(s.session_id));
+          const pick = evo.find((s) => s.session_id === stored) ?? evo[evo.length - 1];
+          if (pick) setEvoActiveId(pick.session_id);
         }
       } catch {
         /* ignore */
@@ -303,6 +351,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             void refreshSessions();
             void refreshPending(sid);
           }
+          // R16: reflection finished for this session → pull the proposals so the
+          // nudge card / Evolution-tab suggestions can show them.
+          if (e.kind === "reflection.ready") {
+            void api.getReflection(sid).then((r) => {
+              if (activeIdRef.current === sid) setReflection(r);
+            });
+          }
         },
         () => {
           /* stream error — the timeline keeps its backfilled history */
@@ -316,6 +371,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!authed || !activeId) return;
     let cancelled = false;
+    setReflection(null); // clear stale suggestions until this session's load
     (async () => {
       try {
         const [backfill] = await Promise.all([
@@ -326,6 +382,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setEvents(backfill);
         const lastId = backfill.length ? backfill[backfill.length - 1].id : undefined;
         openStreamFor(activeId, lastId);
+        // R16: load any existing reflection for this (research) session.
+        if (!isEvo(activeId)) {
+          void api.getReflection(activeId).then((r) => {
+            if (!cancelled && activeIdRef.current === activeId) setReflection(r);
+          });
+        }
       } catch {
         /* ignore */
       }
@@ -339,6 +401,65 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => () => streamRef.current?.close(), []);
 
+  // ---- evolution channel: its own stream, fully independent of the research
+  // stream above (switching tabs never touches either). ----
+  const refreshEvoPending = useCallback(
+    async (sid: string) => {
+      try {
+        setEvoPending(await api.getPending(sid));
+      } catch {
+        setEvoPending([]);
+      }
+    },
+    [api],
+  );
+
+  const openEvoStreamFor = useCallback(
+    (sid: string, sinceId?: string) => {
+      evoStreamRef.current?.close();
+      evoStreamRef.current = api.openStream(
+        sid,
+        sinceId,
+        (e) => {
+          if (evoActiveIdRef.current !== sid) return;
+          setEvoEvents((prev) => (prev.some((p) => p.id === e.id) ? prev : [...prev, e]));
+          if (NOTABLE.has(e.kind) || e.kind.startsWith("evolution") || e.kind.startsWith("skill")) {
+            void refreshSessions();
+            void refreshEvoPending(sid);
+          }
+        },
+        () => {},
+      );
+    },
+    [api, refreshSessions, refreshEvoPending],
+  );
+
+  useEffect(() => {
+    if (!authed || !evoActiveId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const [backfill] = await Promise.all([
+          api.getEvents(evoActiveId, 200),
+          refreshEvoPending(evoActiveId),
+        ]);
+        if (cancelled) return;
+        setEvoEvents(backfill);
+        const lastId = backfill.length ? backfill[backfill.length - 1].id : undefined;
+        openEvoStreamFor(evoActiveId, lastId);
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+      evoStreamRef.current?.close();
+      evoStreamRef.current = null;
+    };
+  }, [authed, evoActiveId, api, openEvoStreamFor, refreshEvoPending]);
+
+  useEffect(() => () => evoStreamRef.current?.close(), []);
+
   // ---- derived ----
   const active = useMemo(() => {
     const a = sessions.find((s) => s.session_id === activeId) ?? null;
@@ -349,6 +470,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, [sessions, activeId, pending]);
   const status = active ? statusOf(active) : null;
   const hasPending = pending.length > 0;
+  // The research rail must not show evo-* sessions (they live in the Evolution tab).
+  const researchSessions = useMemo(() => sessions.filter((s) => !isEvo(s.session_id)), [sessions]);
+  const evoRunning = useMemo(() => {
+    const s = evoActiveId ? sessions.find((x) => x.session_id === evoActiveId) : null;
+    return !!s?.running;
+  }, [sessions, evoActiveId]);
 
   // ---- actions ----
   const select = useCallback((sid: string) => {
@@ -509,6 +636,42 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     [activeId, api, refreshSessions, refreshPending, openStreamFor],
   );
 
+  // ---- evolution actions ----
+  const startEvolution = useCallback(
+    async (command: string) => {
+      const cmd = command.trim();
+      if (!cmd) return;
+      try {
+        const { session_id } = await api.spawnEvolution(cmd);
+        localStorage.setItem(EVO_KEY, session_id);
+        setEvoEvents([]);
+        setEvoPending([]);
+        setEvoActiveId(session_id);
+        await refreshSessions();
+      } catch {
+        /* ignore */
+      }
+    },
+    [api, refreshSessions],
+  );
+
+  const answerEvo = useCallback(
+    async (requestId: string, decision: "approve" | "reject", note?: string) => {
+      if (!evoActiveId) return;
+      const sid = evoActiveId;
+      try {
+        await api.answerHitl(sid, requestId, decision, note);
+        await refreshEvoPending(sid);
+        const cur = evoEventsRef.current;
+        const lastId = cur.length ? cur[cur.length - 1].id : undefined;
+        openEvoStreamFor(sid, lastId);
+      } catch {
+        /* ignore */
+      }
+    },
+    [evoActiveId, api, refreshEvoPending, openEvoStreamFor],
+  );
+
   // ---- files / library ----
   const loadFiles = useCallback(async () => {
     if (!activeId) return;
@@ -615,6 +778,23 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (active?.blocked) setRightTab("hitl");
   }, [active?.blocked, activeId]);
 
+  const reflectionNudge = useMemo(
+    () =>
+      reflection && reflection.proposals.length > 0 && !dismissed.has(reflection.session_id)
+        ? reflection
+        : null,
+    [reflection, dismissed],
+  );
+  const dismissReflection = useCallback(() => {
+    const sid = reflection?.session_id;
+    if (!sid) return;
+    setDismissed((prev) => {
+      const next = new Set(prev).add(sid);
+      localStorage.setItem(REFL_DISMISS_KEY, JSON.stringify([...next]));
+      return next;
+    });
+  }, [reflection]);
+
   const value: AppCtx = {
     mock: USE_MOCK,
     api,
@@ -626,7 +806,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     authError,
     login,
     logout,
-    sessions,
+    sessions: researchSessions,
     activeId,
     active,
     status,
@@ -648,6 +828,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     send,
     stop,
     answer,
+    evoActiveId,
+    evoEvents,
+    evoPending,
+    evoRunning,
+    evolutionCommand,
+    setEvolutionCommand,
+    startEvolution,
+    answerEvo,
+    reflection,
+    reflectionNudge,
+    dismissReflection,
     files,
     loadFiles,
     downloadFile,
