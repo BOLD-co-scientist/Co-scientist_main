@@ -41,13 +41,20 @@ function buildUnits(evs: Ev[]): Unit[] {
 }
 
 export default function EventStream() {
-  const { active, status, events, hasPending, pending, setRightTab, stop, workingHyp, clearWorkingHyp, setMainView, draftNew } = useApp();
+  const { active, status, events, hasPending, pending, setRightTab, stop, workingHyp, clearWorkingHyp, setMainView, draftNew, reflectionNudge, dismissReflection, setEvolutionCommand } = useApp();
   const scRef = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   // Default timeline hides low-signal system events (see isSystemNoise). ⌘/Ctrl-O
   // reveals them, mirroring Claude Code's Ctrl-O transcript view — a shortcut,
   // not an on-screen switch.
   const [showSystem, setShowSystem] = useState(false);
+  const [suggestionsOpen, setSuggestionsOpen] = useState(true);
+  const [selectedSuggestion, setSelectedSuggestion] = useState<number | null>(null);
+
+  useEffect(() => {
+    setSelectedSuggestion(null);
+    setSuggestionsOpen(true);
+  }, [reflectionNudge?.session_id]);
 
   useEffect(() => {
     const onKey = (ev: KeyboardEvent) => {
@@ -197,6 +204,40 @@ export default function EventStream() {
         )}
         <div style={{ height: 6 }} />
       </div>
+
+      {reflectionNudge && (
+        <div style={{ margin: "0 24px 10px", padding: "11px 13px", background: "var(--evo-soft)", border: "1px solid var(--evo)", borderRadius: 10, animation: "fade .3s ease" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 11 }}>
+            <button onClick={() => setSuggestionsOpen((open) => !open)} aria-expanded={suggestionsOpen} style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: 9, textAlign: "left", background: "transparent" }}>
+              <span style={{ fontSize: 13, color: "var(--evo)" }}>{suggestionsOpen ? "⌄" : "›"}</span>
+              <span style={{ fontFamily: "var(--mono)", fontSize: 9.5, fontWeight: 700, color: "var(--evo)", textTransform: "uppercase", letterSpacing: ".06em" }}>Evolution proposals</span>
+              <span style={{ fontSize: 12, color: "var(--mid)" }}>{reflectionNudge.proposals.length} suggestion{reflectionNudge.proposals.length === 1 ? "" : "s"}</span>
+            </button>
+            <button onClick={dismissReflection} title="Close suggestions" aria-label="Close suggestions" style={{ flex: "0 0 auto", padding: "4px 7px", fontSize: 13, color: "var(--lo)", background: "transparent" }}>×</button>
+          </div>
+          {suggestionsOpen && (
+            <>
+              <div style={{ margin: "9px 0 8px 22px", fontSize: 12, color: "var(--mid)" }}>Select proposals to prepare an evolution request.</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, marginLeft: 22, maxHeight: 280, overflowY: "auto", paddingRight: 3 }}>
+                {reflectionNudge.proposals.map((proposal, index) => {
+                  const selected = selectedSuggestion === index;
+                  return (
+                    <button key={index} onClick={() => setSelectedSuggestion((current) => current === index ? null : index)} aria-pressed={selected} style={{ padding: "8px 10px", textAlign: "left", border: `1px solid ${selected ? "var(--evo)" : "var(--border)"}`, borderRadius: 8, background: selected ? "var(--bg1)" : "transparent", color: "var(--hi)" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                        <span style={{ fontSize: 13, color: selected ? "var(--evo)" : "var(--lo)" }}>{selected ? "✓" : "○"}</span>
+                        <span style={{ fontSize: 12.5, fontWeight: 600, flex: 1 }}>{proposal.title}</span>
+                        <span style={{ fontFamily: "var(--mono)", fontSize: 9, color: "var(--evo)" }}>{proposal.direction}</span>
+                      </div>
+                      <div style={{ margin: "4px 0 0 20px", fontSize: 11.5, lineHeight: 1.4, color: "var(--mid)" }}>{proposal.rationale}</div>
+                    </button>
+                  );
+                })}
+              </div>
+              <button onClick={() => { setEvolutionCommand(selectedSuggestion === null ? "" : reflectionNudge.proposals[selectedSuggestion].command); dismissReflection(); setMainView("evolution"); }} style={{ margin: "10px 0 0 22px", padding: "6px 11px", fontSize: 11.5, fontWeight: 700, borderRadius: 7, background: "var(--evo)", color: "#100a1c" }}>Go to evolution</button>
+            </>
+          )}
+        </div>
+      )}
 
       <Composer />
     </div>

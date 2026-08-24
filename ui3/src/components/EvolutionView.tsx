@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useApp } from "../state/store";
 import { toVM } from "../lib/eventVM";
+import type { EvoProposal } from "../lib/types";
 import EvolutionGraph from "./EvolutionGraph";
 import EventItem from "./EventItem";
 import HitlPanel from "./HitlPanel";
@@ -9,8 +10,15 @@ import HitlPanel from "./HitlPanel";
 // lifecycle stream, approve/reject the merge — all on the independent evolution
 // channel (never disturbs a running research session).
 function EvoConversation() {
-  const { evoEvents, evoPending, evoRunning, startEvolution, answerEvo } = useApp();
-  const [cmd, setCmd] = useState("");
+  const { evoEvents, evoPending, evoRunning, startEvolution, answerEvo, evolutionCommand, setEvolutionCommand } = useApp();
+  const [cmd, setCmd] = useState(evolutionCommand);
+
+  useEffect(() => {
+    if (evolutionCommand) {
+      setCmd(evolutionCommand);
+      setEvolutionCommand("");
+    }
+  }, [evolutionCommand, setEvolutionCommand]);
 
   const submit = () => {
     const c = cmd.trim();

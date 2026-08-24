@@ -20,6 +20,7 @@ import type {
   LibraryFile,
   LibraryHealth,
   MemoryHit,
+  Reflection,
   RoleSummary,
   SessionFile,
   SessionSummary,
@@ -29,6 +30,7 @@ const TOKEN_KEY = "csk_token";
 const THEME_KEY = "cs_theme";
 const HYP_KEY = "cs_active_hyp"; // persisted id of the open hypothesis session
 const EVO_KEY = "cs_active_evo"; // persisted id of the open evolution session
+const REFL_DISMISS_KEY = "cs_refl_dismissed"; // sids whose reflection nudge was closed
 const isEvo = (sid: string) => sid.startsWith("evo-");
 const USE_MOCK = import.meta.env.VITE_MOCK === "1";
 
@@ -82,8 +84,17 @@ interface AppCtx {
   evoEvents: Ev[];
   evoPending: HitlPending[];
   evoRunning: boolean;
+  evolutionCommand: string;
+  setEvolutionCommand: (command: string) => void;
   startEvolution: (command: string) => Promise<void>;
   answerEvo: (requestId: string, decision: "approve" | "reject", note?: string) => Promise<void>;
+
+  // ---- R16: reflection for the active research session. `reflection` seeds the
+  // Evolution-tab suggestion cards; `reflectionNudge` is the same but null once
+  // dismissed / when there's nothing to suggest (drives the in-conversation card).
+  reflection: Reflection | null;
+  reflectionNudge: Reflection | null;
+  dismissReflection: () => void;
 
   files: SessionFile[];
   loadFiles: () => void;
@@ -146,9 +157,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [draftNew, setDraftNew] = useState(false); // "New session" compose view, no backend session yet
   const [queue, setQueue] = useState<string[]>([]); // messages queued while the agent is busy
 
+  const [reflection, setReflection] = useState<Reflection | null>(null);
+  // Per-session nudge dismissals, persisted so a closed card stays closed.
+  const [dismissed, setDismissed] = useState<Set<string>>(
+    () => new Set(JSON.parse(localStorage.getItem(REFL_DISMISS_KEY) || "[]") as string[]),
+  );
+
   const [evoActiveId, setEvoActiveId] = useState<string | null>(null);
   const [evoEvents, setEvoEvents] = useState<Ev[]>([]);
   const [evoPending, setEvoPending] = useState<HitlPending[]>([]);
+  const [evolutionCommand, setEvolutionCommand] = useState("");
   const evoStreamRef = useRef<StreamHandle | null>(null);
   const evoActiveIdRef = useRef<string | null>(null);
   evoActiveIdRef.current = evoActiveId;
@@ -333,6 +351,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             void refreshSessions();
             void refreshPending(sid);
           }
+          // R16: reflection finished for this session → pull the proposals so the
+          // nudge card / Evolution-tab suggestions can show them.
+          if (e.kind === "reflection.ready") {
+            void api.getReflection(sid).then((r) => {
+              if (activeIdRef.current === sid) setReflection(r);
+            });
+          }
         },
         () => {
           /* stream error — the timeline keeps its backfilled history */
@@ -346,6 +371,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!authed || !activeId) return;
     let cancelled = false;
+    setReflection(null); // clear stale suggestions until this session's load
     (async () => {
       try {
         const [backfill] = await Promise.all([
@@ -356,6 +382,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setEvents(backfill);
         const lastId = backfill.length ? backfill[backfill.length - 1].id : undefined;
         openStreamFor(activeId, lastId);
+        // R16: load any existing reflection for this (research) session.
+        if (!isEvo(activeId)) {
+          void api.getReflection(activeId).then((r) => {
+            if (!cancelled && activeIdRef.current === activeId) setReflection(r);
+          });
+        }
       } catch {
         /* ignore */
       }
@@ -746,6 +778,23 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (active?.blocked) setRightTab("hitl");
   }, [active?.blocked, activeId]);
 
+  const reflectionNudge = useMemo(
+    () =>
+      reflection && reflection.proposals.length > 0 && !dismissed.has(reflection.session_id)
+        ? reflection
+        : null,
+    [reflection, dismissed],
+  );
+  const dismissReflection = useCallback(() => {
+    const sid = reflection?.session_id;
+    if (!sid) return;
+    setDismissed((prev) => {
+      const next = new Set(prev).add(sid);
+      localStorage.setItem(REFL_DISMISS_KEY, JSON.stringify([...next]));
+      return next;
+    });
+  }, [reflection]);
+
   const value: AppCtx = {
     mock: USE_MOCK,
     api,
@@ -783,8 +832,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     evoEvents,
     evoPending,
     evoRunning,
+    evolutionCommand,
+    setEvolutionCommand,
     startEvolution,
     answerEvo,
+    reflection,
+    reflectionNudge,
+    dismissReflection,
     files,
     loadFiles,
     downloadFile,

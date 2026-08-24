@@ -12,6 +12,7 @@ import type {
   LibraryHealth,
   LibraryUploadResponse,
   MemorySearchResult,
+  Reflection,
   RoleSummary,
   SendResult,
   SessionFile,
@@ -48,6 +49,9 @@ export interface Api {
   deleteLibrary(name: string): Promise<{ ok: boolean }>;
   libraryHealth(): Promise<LibraryHealth>;
   getPending(sid: string): Promise<HitlPending[]>;
+  // R16: the per-session evolution reflection + proposals (empty when none).
+  getReflection(sid: string): Promise<Reflection>;
+  reflect(sid: string): Promise<{ ok: boolean }>;
   answerHitl(
     sid: string,
     requestId: string,
@@ -416,6 +420,14 @@ export function createApi(cfg: ApiConfig): Api {
 
     getPending: async (sid) =>
       (await req<Raw[]>(`/hitl/${encodeURIComponent(sid)}/pending`)).map(mapPending),
+
+    getReflection: async (sid) => {
+      const r = await req<Raw>(`/sessions/${encodeURIComponent(sid)}/reflection`);
+      const proposals = Array.isArray(r.proposals) ? (r.proposals as Reflection["proposals"]) : [];
+      return { session_id: sid, reflection: (r.reflection as string) ?? "", proposals };
+    },
+    reflect: (sid) =>
+      req<{ ok: boolean }>(`/sessions/${encodeURIComponent(sid)}/reflect`, { method: "POST" }),
 
     answerHitl: (sid, requestId, decision, note) =>
       req<{ ok: boolean }>(`/hitl/${encodeURIComponent(sid)}/${encodeURIComponent(requestId)}/answer`, {

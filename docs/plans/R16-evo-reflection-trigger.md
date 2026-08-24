@@ -38,6 +38,15 @@ Two human gates are deliberate (HITL paramount): gate 1 = "evolve in this direct
 - **Cost:** one reflection call per non-trivial completed turn, medium tier (needs reasoning, can't be the weakest model or it always suggests tools). Under the CLAUDE.md $5 self-verify bar.
 - **Out of scope now:** cross-session aggregation of harness signals ("3 sessions hit the same friction → stronger signal"); the R2 global lessons buffer itself; multi-turn evolution plan-mode.
 
+### Eventual target — full RHI (not v1)
+
+The paper our design draws on is **Recursive Harness Self-Improvement** (Lee, Xu, Seely, Lee, Zaharia, Tang; arXiv:2607.15524). Its engine is **pairwise comparison across revision versions: the proposer conditions on the whole revision history + each version's relative performance**, refined over multiple automatic cycles; evaluation is benchmark-driven pairwise feedback across a task suite. Its result: a few iterations lift low-reasoning-effort agents past the max-reasoning-effort setting at ~60% less inference cost.
+
+Our v1 is deliberately **not** that — by *conditioning* it is closer to Reflexion / Self-Refine (reflect on a single session → propose, human evaluates). **The eventual target is a human-gated RHI: proposer conditions on the version history + relative performance, with pairwise before/after measurement of whether an evolution actually helped.** Two prerequisites we do NOT have yet, which is why this is a direction not a step:
+1. **Evolution structure + version control isn't landed** — no first-class registry of harness revisions and their lineage/outcomes to condition on (the archive). `memory.recall_global` holds past evolutions' rationales but no measured effect and isn't fed into `evo_reflect.md`.
+2. **No effect measurement** — nothing runs a task before/after an evolution to produce a comparative signal.
+Path to get there: (a) feed the revision archive + observed outcomes into the reflection prompt; (b) add pairwise/before-after measurement; then the human gate has objective evidence and the loop becomes genuinely recursive. Connects to R5 (cost) and cross-session aggregation above.
+
 ## Steps
 
 ### Backend — reflection node (A + B)

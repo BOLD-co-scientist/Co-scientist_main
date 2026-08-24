@@ -189,6 +189,20 @@ export interface EvoLogEntry {
   tone: "evo" | "grn" | "mid";
 }
 
+// ---- R16: evolution reflection & suggestions (per research session) ----
+export interface EvoProposal {
+  title: string; // may carry a trailing "(recommended)" the model added, sparingly
+  direction: string; // agents | workflow | tools | methodology | memory
+  rationale: string; // grounded in the session; notes recurrence in prose
+  command: string; // ready-to-run instruction for the evolution agent
+}
+
+export interface Reflection {
+  session_id: string; // the research session this reflection is about
+  reflection: string;
+  proposals: EvoProposal[];
+}
+
 // ---- Evolution capability graph (self-modified skills) ----
 export type SkillStatus = "core" | "merged" | "inflight" | "proposed";
 export type SkillDir = "docking" | "selectivity" | "ingestion" | "memory";

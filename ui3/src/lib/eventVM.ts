@@ -105,6 +105,7 @@ const NOISE_KINDS = new Set([
   "turn.start", // "new turn" — your own message already marks it
   "bus.drain", // internal message-bus bookkeeping
   "checkpoint.triggered", // the pending approval card already represents it
+  "reflection.ready", // R16: surfaced by the nudge card / evo suggestions, not the timeline
   // deep_research lifecycle: the "Search · query" action row already represents
   // the search; these bracket it with bare spine lines. Hidden as a unit (a
   // start/complete pair must not be split, or the survivor is an orphan).
