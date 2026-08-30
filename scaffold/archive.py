@@ -31,6 +31,10 @@ SCHEMA_VERSION = 1
 _TAG_PREFIX = "ver/"
 
 
+class ArchiveError(RuntimeError):
+    pass
+
+
 def _git(*args: str, repo: Path) -> str:
     return subprocess.check_output(
         ["git", *args], cwd=str(repo), stderr=subprocess.STDOUT, text=True
@@ -154,6 +158,36 @@ def _ver_tags(repo: Path) -> list[dict[str, str]]:
             commit = sha.strip()
         out.append({"tag": ref.strip(), "id": ref.strip()[len(_TAG_PREFIX):], "sha": commit})
     return out
+
+
+def activate_version(repo: Path, ref: str) -> str:
+    """Switch the tenant's working tree to version ``ref`` (a ``ver/<id>`` id, or
+    a bare commit sha such as the bootstrap root) via a **detached** checkout —
+    the tag is the source of truth, so we never move a branch pointer. Returns
+    the resolved commit sha.
+
+    IMPORTANT: the caller MUST ensure no research/evolution turn is running and
+    must block new spawns for the duration — this swaps the agent-layer code that
+    per-turn subprocesses read. This function only does the git checkout; the
+    idle-guard + spawn-lock live in the API layer (see docs R17: switch mechanics).
+    """
+    target = None
+    tag = _TAG_PREFIX + ref
+    try:
+        target = _git("rev-list", "-n", "1", tag, repo=repo).strip()
+    except subprocess.CalledProcessError:
+        target = None
+    if not target:
+        # Not a ver tag — accept a raw commit-ish (e.g. the bootstrap root sha).
+        try:
+            target = _git("rev-parse", "--verify", f"{ref}^{{commit}}", repo=repo).strip()
+        except subprocess.CalledProcessError:
+            raise ArchiveError(f"unknown version or commit: {ref!r}")
+    try:
+        _git("checkout", "-q", "--detach", target, repo=repo)
+    except subprocess.CalledProcessError as e:
+        raise ArchiveError(f"checkout failed (working tree not clean?):\n{e.output}")
+    return target
 
 
 def list_versions(repo: Path) -> dict[str, Any]:
