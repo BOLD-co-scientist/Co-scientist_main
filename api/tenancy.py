@@ -29,7 +29,7 @@ _COPY_FILES = (
     "ROADMAP.md",
     ".gitignore",
 )
-_COPY_TEST_FILES = ("__init__.py", "test_smoke_v0.py")
+_COPY_TEST_FILES = ("__init__.py", "test_smoke_v0.py", "test_contract_compat.py")
 _IGNORE_NAMES = {
     "__pycache__",
     ".pytest_cache",
@@ -119,6 +119,12 @@ def ensure_user_root(user_id: str) -> Path:
         dst = tests_dir / filename
         if src.exists() and not dst.exists():
             shutil.copy2(src, dst)
+    # R17: the golden fixtures the compat gate reads must travel into the tenant
+    # repo too, or the smoke run in an evolution worktree can't find them.
+    fixtures_src = settings.ROOT / "tests" / "fixtures"
+    fixtures_dst = tests_dir / "fixtures"
+    if fixtures_src.exists() and not fixtures_dst.exists():
+        shutil.copytree(fixtures_src, fixtures_dst, ignore=ignore)
 
     _ensure_runtime_dirs(root)
     _ensure_git_repo(root)

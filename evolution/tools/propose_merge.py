@@ -23,7 +23,9 @@ def _is_strict(diff: str) -> bool:
 
 async def _run_smoke(wt: sandbox.Worktree) -> tuple[bool, str]:
     proc = await asyncio.create_subprocess_shell(
-        "python -m pytest -q tests/test_smoke_v0.py",
+        # R17: the contract compat test rides the smoke gate — an evolution that
+        # can no longer read old durable data (golden fixtures) is auto-rejected.
+        "python -m pytest -q tests/test_smoke_v0.py tests/test_contract_compat.py",
         cwd=str(wt.path),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
