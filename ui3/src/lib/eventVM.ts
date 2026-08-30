@@ -129,6 +129,21 @@ export function isSystemNoise(e: Ev): boolean {
   return false;
 }
 
+// Drop the redundant `human_directive` echo of a `message.received`. The backend
+// logs a follow-up human message twice — `message.received` (immediately on POST)
+// then `human_directive` (when the turn subprocess starts) — with identical text;
+// both render as the same human bubble. This removes ONLY an exact-text duplicate
+// of the immediately-preceding `message.received`, so the interrupt-feedback
+// `human_directive` (which has no `message.received` twin) is preserved.
+export function dedupeHumanEcho(events: Ev[]): Ev[] {
+  const txt = (x: Ev) => ((x as Record<string, unknown>).text as string | undefined) ?? "";
+  return events.filter((e, i) => {
+    if (e.kind !== "human_directive") return true;
+    const p = events[i - 1];
+    return !(p && p.kind === "message.received" && txt(p) === txt(e));
+  });
+}
+
 function firstLine(text: string, max = 72): string {
   const line = text
     .split("\n")

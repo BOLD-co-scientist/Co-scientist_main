@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useApp } from "../state/store";
 import type { Ev } from "../lib/types";
-import { cleanTool, isSystemNoise, toVM, type ToolResult } from "../lib/eventVM";
+import { cleanTool, dedupeHumanEcho, isSystemNoise, toVM, type ToolResult } from "../lib/eventVM";
 import EventItem from "./EventItem";
 import ToolGroup from "./ToolGroup";
 import Composer from "./Composer";
@@ -87,7 +87,11 @@ export default function EventStream() {
     const visible = (showSystem ? events : events.filter((e) => !isSystemNoise(e))).filter(
       (e) => e.kind !== "tool.result",
     );
-    return buildUnits(visible);
+    // Follow-up human messages are logged twice (message.received + an identical
+    // human_directive echo); collapse the echo so a message shows once. Kept raw
+    // in system view (⌘/Ctrl-O). See dedupeHumanEcho.
+    const deduped = showSystem ? visible : dedupeHumanEcho(visible);
+    return buildUnits(deduped);
   }, [events, showSystem]);
 
   useEffect(() => {
