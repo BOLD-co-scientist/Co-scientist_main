@@ -10,7 +10,7 @@ from pathlib import Path
 
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
-from scaffold import eventlog, hitl, sandbox, settings
+from scaffold import archive, eventlog, hitl, sandbox, settings
 from scaffold._atomic import write_json
 
 
@@ -123,14 +123,17 @@ def make_server(session_id: str, wt: sandbox.Worktree):
         )
         write_json(archive_dir / "decision.json", {"status": "pending", "branch": wt.branch})
 
+        strict = _is_strict(diff)
         eventlog.append(
             session_id, actor="evolution", kind="evolution.proposal",
-            ref=str(archive_dir.name), strict=_is_strict(diff),
+            ref=str(archive_dir.name), strict=strict,
         )
 
-        if _is_strict(diff):
+        smoke_info: dict = {"ran": False}
+        if strict:
             ok, smoke_text = await _run_smoke(wt)
             (archive_dir / "smoke.log").write_text(smoke_text, encoding="utf-8")
+            smoke_info = {"ran": True, "ok": ok}
             if not ok:
                 write_json(archive_dir / "decision.json", {"status": "auto_rejected", "reason": "smoke failed"})
                 eventlog.append(session_id, actor="evolution", kind="evolution.auto_reject", ref=str(archive_dir.name))
@@ -144,7 +147,7 @@ def make_server(session_id: str, wt: sandbox.Worktree):
                 "archive": str(archive_dir),
                 "branch": wt.branch,
                 "diff_preview": diff[:8000],
-                "strict": _is_strict(diff),
+                "strict": strict,
                 "rationale": rationale,
             },
         )
@@ -169,9 +172,22 @@ def make_server(session_id: str, wt: sandbox.Worktree):
             )
             (archive_dir / "revert.patch").write_text(revert, encoding="utf-8")
             write_json(archive_dir / "decision.json", {"status": "merged", "head": head})
+            # R17: promote the merged evolution to a first-class version node —
+            # tag ver/<id> + archive manifest — so it becomes switchable. Never
+            # fatal: the merge already landed; a manifest hiccup must not fail it.
+            try:
+                node = archive.record_merged_version(
+                    settings.ROOT, archive_dir=archive_dir, head_sha=head,
+                    base_sha=wt.base, summary=summary, rationale=rationale,
+                    owner=archive.owner_of(settings.ROOT), smoke=smoke_info,
+                )
+                eventlog.append(session_id, actor="evolution", kind="version.recorded",
+                                ref=str(archive_dir.name), version=node["id"], tag=node["tag"])
+            except Exception as e:
+                eventlog.append(session_id, actor="evolution", kind="version.record_error", error=str(e))
             sandbox.remove_after_merge(wt)
             eventlog.append(session_id, actor="evolution", kind="evolution.merged", ref=str(archive_dir.name))
-            return {"content": [{"type": "text", "text": f"MERGED. Archived at {archive_dir.name}. Restart sessions to pick up changes."}]}
+            return {"content": [{"type": "text", "text": f"MERGED as version {archive_dir.name}. Restart sessions to pick up changes."}]}
         else:
             decision_kind = decision.get("decision", "reject")
             note = decision.get("note", "") or ""

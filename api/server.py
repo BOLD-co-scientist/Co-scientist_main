@@ -18,7 +18,7 @@ import uuid
 import yaml
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
-from scaffold import sandbox, settings
+from scaffold import archive, sandbox, settings
 from scaffold._atomic import append_jsonl, read_json, write_json
 
 from . import schemas
@@ -915,6 +915,15 @@ def git_history(limit: int = 200, ctx: UserContext = Depends(_ctx)):
         return sandbox.history(limit=limit, repo=ctx.root)
     except sandbox.GitError as e:
         raise HTTPException(500, f"git history failed: {e}")
+
+
+@app.get("/versions")
+def list_versions(ctx: UserContext = Depends(_ctx)):
+    """R17: the tenant's evolution version DAG — every ``ver/<id>`` node (a
+    merged evolution, made switchable) joined with its archive metadata
+    (summary, rationale, owner, smoke, status), plus which node is currently
+    active (== HEAD). Read-only, tenant-scoped; safe on every UI refresh."""
+    return archive.list_versions(ctx.root)
 
 
 @app.get("/git/commit/{sha}")
