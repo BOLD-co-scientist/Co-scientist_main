@@ -319,6 +319,8 @@ export function createMockApi(): Api {
         ],
       }),
     spawnEvolution: (command) => delay({ session_id: "evo-mock-1", command }),
+    versions: () => delay({ versions: [], active: null }),
+    activateVersion: (_id) => delay({ versions: [], active: null }),
 
     // ---- hypothesis engine (mock: canned parallel sets, deterministic) ----
     startHypothesis: (goal, n = 4) => {

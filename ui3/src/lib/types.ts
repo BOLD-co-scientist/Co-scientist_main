@@ -121,6 +121,27 @@ export interface GitHistory {
   commits: GitCommit[];
 }
 
+// R17: a switchable version node (a merged evolution, tagged ver/<id>).
+export interface Version {
+  id: string;
+  tag: string;
+  sha: string;
+  base_sha?: string;
+  summary?: string;
+  rationale?: string;
+  owner?: string;
+  status?: string; // merged | rejected | superseded | ...
+  smoke?: { ran: boolean; ok?: boolean };
+  created_at?: number;
+  archive_dir?: string;
+  active?: boolean;
+}
+export interface VersionList {
+  versions: Version[];
+  active: string | null; // id of the active version, or null (detached / root)
+  head?: string;
+}
+
 // What's *in* a commit — for the clickable evolution-graph node detail.
 export interface CommitFile {
   path: string;

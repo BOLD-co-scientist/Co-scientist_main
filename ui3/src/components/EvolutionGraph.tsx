@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties } from "react";
 import { useApp } from "../state/store";
-import type { CommitDetail, GitCommit } from "../lib/types";
+import type { CommitDetail, GitCommit, Version, VersionList } from "../lib/types";
 
 // Real evolution lineage, rendered from the researcher's OWN harness repo
 // (GET /git/history, tenant-scoped). Each commit is a node; parent→child edges
@@ -92,25 +92,39 @@ function laneColor(i: number): string {
 }
 
 export default function EvolutionGraph() {
-  const { git, loadGit } = useApp();
+  const { git, loadGit, versions, loadVersions, activateVersion } = useApp();
   const [sel, setSel] = useState<string | null>(null);
 
-  // Refetch on mount + poll, so a newly spawned/merged evolution appears as a
-  // child node without a manual reload.
+  // Refetch on mount + poll, so a newly spawned/merged evolution (and a version
+  // switch) appears without a manual reload.
   useEffect(() => {
     loadGit();
-    const id = setInterval(() => loadGit(), 8000);
+    loadVersions();
+    const id = setInterval(() => {
+      loadGit();
+      loadVersions();
+    }, 8000);
     return () => clearInterval(id);
-  }, [loadGit]);
+  }, [loadGit, loadVersions]);
 
   const commits = git?.commits ?? [];
   const { nodes, edges, cols } = useMemo(() => layout(commits), [commits]);
 
+  // R17: which commits are switchable version nodes, and which is active (HEAD).
+  const verBySha = useMemo(() => {
+    const m = new Map<string, Version>();
+    for (const v of versions?.versions ?? []) m.set(v.sha, v);
+    return m;
+  }, [versions]);
+  const activeSha = versions?.head ?? null;
+  const activeVer = (versions?.versions ?? []).find((v) => v.id === versions?.active) ?? null;
+
   const isEvo = (c: GitCommit) => c.refs.some((r) => r.kind === "evo");
   const isMainTip = (c: GitCommit) => c.refs.some((r) => r.kind === "main");
-  const isHead = (c: GitCommit) => c.refs.some((r) => r.kind === "head");
+  const isVersion = (c: GitCommit) => verBySha.has(c.sha);
+  const isActive = (c: GitCommit) => activeSha != null && c.sha === activeSha;
   const nodeColor = (c: GitCommit) =>
-    isEvo(c) ? "var(--evo)" : isMainTip(c) ? "var(--grn)" : c.parents.length > 1 ? "var(--accent)" : "var(--mid)";
+    isActive(c) ? "var(--accent)" : isVersion(c) ? "var(--grn)" : isEvo(c) ? "var(--evo)" : isMainTip(c) ? "var(--grn)" : c.parents.length > 1 ? "var(--accent)" : "var(--mid)";
 
   const merges = commits.filter((c) => c.parents.length > 1).length;
   const evoTips = commits.filter(isEvo).length;
@@ -122,7 +136,9 @@ export default function EvolutionGraph() {
   const graphEmpty = commits.length === 0 || (commits.length === 1 && commits[0].parents.length === 0 && !isEvo(commits[0]));
 
   return (
-    <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
+    <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
+      <ActiveBar ver={activeVer} sha={activeSha} />
+      <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
       {/* graph canvas */}
       <div style={{ flex: 1, overflow: "auto", background: "var(--bg0)", position: "relative", minHeight: 0 }}>
         {graphEmpty ? (
@@ -161,8 +177,8 @@ export default function EvolutionGraph() {
               const color = nodeColor(n.c);
               return (
                 <g key={n.c.sha} style={{ cursor: "pointer" }} onClick={() => setSel(n.c.sha)}>
-                  {isHead(n.c) && <circle cx={x} cy={y} r={DOT + 4} fill="none" stroke="var(--accent-dim)" strokeWidth={3} />}
-                  <circle cx={x} cy={y} r={DOT} fill={isEvo(n.c) || isMainTip(n.c) ? color : "var(--bg2)"} stroke={color} strokeWidth={2} />
+                  {isActive(n.c) && <circle cx={x} cy={y} r={DOT + 5} fill="none" stroke="var(--accent)" strokeWidth={3} />}
+                  <circle cx={x} cy={y} r={DOT} fill={isActive(n.c) || isVersion(n.c) || isEvo(n.c) || isMainTip(n.c) ? color : "var(--bg2)"} stroke={color} strokeWidth={2} />
                   {/* refs + subject to the right of the last lane */}
                   <foreignObject x={PADX + cols * LANE + 6} y={y - ROW / 2 + 6} width={width - (PADX + cols * LANE + 6) - 12} height={ROW - 8}>
                     <div
@@ -179,7 +195,9 @@ export default function EvolutionGraph() {
                     >
                       <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                         <span style={{ fontFamily: "var(--mono)", fontSize: 10.5, color: "var(--lo)" }}>{short(n.c.sha)}</span>
-                        {n.c.refs.map((r) => (
+                        {isActive(n.c) && <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: ".05em", padding: "1px 6px", borderRadius: 5, background: "var(--accent)", color: "#0a0f1c" }}>ACTIVE</span>}
+                        {isVersion(n.c) && !isActive(n.c) && <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: ".05em", padding: "1px 6px", borderRadius: 5, background: "var(--ok-soft)", color: "var(--ok)" }}>VERSION</span>}
+                        {n.c.refs.filter((r) => r.kind !== "tag").map((r) => (
                           <span key={r.name} style={refChip(r.kind)}>{r.name}</span>
                         ))}
                       </div>
@@ -198,11 +216,29 @@ export default function EvolutionGraph() {
       {/* inspector */}
       <div style={{ width: 320, flex: "0 0 320px", borderLeft: "1px solid var(--border)", background: "var(--bg1)", display: "flex", flexDirection: "column", minHeight: 0 }}>
         {selected ? (
-          <CommitInspector c={selected} isEvo={isEvo(selected)} isMain={isMainTip(selected)} />
+          <CommitInspector
+            c={selected}
+            isEvo={isEvo(selected)}
+            version={verBySha.get(selected.sha) ?? null}
+            active={isActive(selected)}
+            onActivate={activateVersion}
+          />
         ) : (
           <Overview total={commits.length} merges={merges} evoTips={evoTips} />
         )}
       </div>
+      </div>
+    </div>
+  );
+}
+
+function ActiveBar({ ver, sha }: { ver: Version | null; sha: string | null }) {
+  const label = ver ? ver.summary || ver.id : sha ? "an untagged commit (e.g. the bootstrap root)" : "—";
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 16px", borderBottom: "1px solid var(--border)", background: "var(--bg1)" }}>
+      <span style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: ".07em", color: "var(--accent)", textTransform: "uppercase", flex: "0 0 auto" }}>Active version</span>
+      <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: "var(--hi)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={label}>{label}</span>
+      {sha && <span style={{ fontFamily: "var(--mono)", fontSize: 10.5, color: "var(--lo)", flex: "0 0 auto" }}>{short(sha)}</span>}
     </div>
   );
 }
@@ -210,18 +246,54 @@ export default function EvolutionGraph() {
 function refChip(kind: string): CSSProperties {
   const base = { fontFamily: "var(--mono)", fontSize: 9.5, padding: "1px 6px", borderRadius: 5 } as const;
   if (kind === "evo") return { ...base, background: "var(--evo-soft)", color: "var(--evo)" };
-  if (kind === "main") return { ...base, background: "var(--ok-soft)", color: "var(--ok)" };
+  // R17: main/master is just git's branch pointer at the latest-merged tip — not
+  // "what's running" (that's the ACTIVE node). Neutral chip, not a green "live".
+  if (kind === "main") return { ...base, background: "var(--bg3)", color: "var(--mid)" };
   if (kind === "head") return { ...base, background: "var(--accent-soft)", color: "var(--accent)" };
   if (kind === "tag") return { ...base, background: "var(--bg3)", color: "var(--mid)" };
   return { ...base, background: "var(--bg3)", color: "var(--mid)" };
 }
 
-function CommitInspector({ c, isEvo, isMain }: { c: GitCommit; isEvo: boolean; isMain: boolean }) {
+function CommitInspector({
+  c,
+  isEvo,
+  version,
+  active,
+  onActivate,
+}: {
+  c: GitCommit;
+  isEvo: boolean;
+  version: Version | null;
+  active: boolean;
+  onActivate: (id: string) => Promise<VersionList>;
+}) {
   const { api, refreshSessions, select, setMainView } = useApp();
   const [detail, setDetail] = useState<CommitDetail | null>(null);
   const [prompt, setPrompt] = useState("");
   const [spawning, setSpawning] = useState(false);
   const [note, setNote] = useState<string | null>(null);
+  const [activating, setActivating] = useState(false);
+  const [actNote, setActNote] = useState<string | null>(null);
+
+  const activate = async () => {
+    if (active) return;
+    // Version nodes switch by id; the untagged bootstrap root switches by sha.
+    const ref = version?.id ?? c.sha;
+    setActivating(true);
+    setActNote(null);
+    try {
+      await onActivate(ref);
+    } catch (e) {
+      // 409 = a turn is running / switch in progress.
+      setActNote(
+        e && typeof e === "object" && "status" in e && (e as { status?: number }).status === 409
+          ? "Can't switch now — stop the running research/evolution turn first."
+          : "Switch failed. Try again.",
+      );
+    } finally {
+      setActivating(false);
+    }
+  };
 
   // "what is in there" — fetch the commit's changed files on select.
   useEffect(() => {
@@ -248,13 +320,18 @@ function CommitInspector({ c, isEvo, isMain }: { c: GitCommit; isEvo: boolean; i
     }
   };
 
-  const [tag, tagColor] = isEvo
-    ? ["In-flight evolution branch", "var(--evo)"]
-    : isMain
-      ? ["Live on main", "var(--ok)"]
-      : c.parents.length > 1
-        ? ["Merge — evolution landed", "var(--accent)"]
-        : ["Commit", "var(--mid)"];
+  // Tag-as-truth (R17): what's "running" is the ACTIVE node (HEAD), not `main`.
+  const [tag, tagColor] = active
+    ? ["Active — running now", "var(--accent)"]
+    : version
+      ? ["Switchable version", "var(--ok)"]
+      : isEvo
+        ? ["In-flight evolution branch", "var(--evo)"]
+        : c.parents.length === 0
+          ? ["Root (v0)", "var(--mid)"]
+          : c.parents.length > 1
+            ? ["Merge — evolution landed", "var(--accent)"]
+            : ["Commit", "var(--mid)"];
   return (
     <div style={{ padding: "18px 18px 22px", overflowY: "auto" }}>
       <div style={{ fontSize: 11, fontWeight: 700, color: tagColor as string }}>{tag}</div>
@@ -273,6 +350,54 @@ function CommitInspector({ c, isEvo, isMain }: { c: GitCommit; isEvo: boolean; i
               <span key={r.name} style={refChip(r.kind)}>{r.name}</span>
             ))}
           </div>
+        </div>
+      )}
+
+      {/* R17: switch to this version */}
+      {(version || active || c.parents.length === 0) && (
+        <div
+          style={{
+            marginTop: 16,
+            padding: "12px 13px",
+            border: `1px solid ${active ? "var(--accent-dim)" : "var(--border)"}`,
+            borderRadius: 10,
+            background: active ? "var(--accent-soft)" : "var(--bg2)",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 11, fontWeight: 700, color: active ? "var(--accent)" : "var(--ok)" }}>
+              {active ? "Active version" : version ? "Switchable version" : "Root (v0)"}
+            </span>
+            {version?.smoke?.ran && (
+              <span style={{ fontSize: 9.5, color: version.smoke.ok ? "var(--ok)" : "var(--err)" }}>
+                {version.smoke.ok ? "smoke ✓" : "smoke ✗"}
+              </span>
+            )}
+          </div>
+          {version?.summary && (
+            <div style={{ marginTop: 6, fontSize: 12.5, color: "var(--hi)", lineHeight: 1.4 }}>{version.summary}</div>
+          )}
+          {version?.owner && (
+            <div style={{ marginTop: 4, fontSize: 10.5, color: "var(--lo)" }}>owner {version.owner}</div>
+          )}
+          <button
+            onClick={activate}
+            disabled={active || activating}
+            style={{
+              width: "100%",
+              marginTop: 10,
+              padding: 9,
+              borderRadius: 9,
+              fontWeight: 700,
+              fontSize: 12.5,
+              background: active ? "var(--bg3)" : activating ? "var(--bg2)" : "var(--accent)",
+              color: active ? "var(--lo)" : "#0a0f1c",
+              cursor: active ? "default" : "pointer",
+            }}
+          >
+            {active ? "✓ Currently active" : activating ? "Switching…" : "Activate this version"}
+          </button>
+          {actNote && <div style={{ marginTop: 7, fontSize: 11.5, color: "var(--err)" }}>{actNote}</div>}
         </div>
       )}
 
@@ -361,9 +486,9 @@ function Overview({ total, merges, evoTips }: { total: number; merges: number; e
       </div>
       <div style={{ fontSize: 10.5, fontWeight: 600, color: "var(--lo)", textTransform: "uppercase", letterSpacing: ".07em", margin: "20px 0 11px" }}>Legend</div>
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-        {legend("var(--grn)", "main", "live in the running system")}
-        {legend("var(--evo)", "evo/*", "in-flight worktree, awaiting merge")}
-        {legend("var(--accent)", "merge", "an evolution that landed")}
+        {legend("var(--accent)", "active", "the version running now (HEAD) — what a switch moves")}
+        {legend("var(--grn)", "version", "a merged, switchable version (ver/…)")}
+        {legend("var(--evo)", "evo/*", "in-flight evolution, awaiting merge")}
       </div>
       <div style={{ marginTop: 20, fontSize: 12, color: "var(--lo)", lineHeight: 1.5 }}>
         Click any node to inspect its commit, author, and parents.

@@ -4,6 +4,7 @@ import type {
   Ev,
   CommitDetail,
   GitHistory,
+  VersionList,
   HitlDecision,
   HitlPending,
   HypSession,
@@ -68,6 +69,8 @@ export interface Api {
   gitHistory(limit?: number): Promise<GitHistory>;
   getCommit(sha: string): Promise<CommitDetail>;
   spawnEvolution(command: string, base?: string): Promise<{ session_id: string; command: string }>;
+  versions(): Promise<VersionList>;
+  activateVersion(id: string): Promise<VersionList>;
   // ---- hypothesis engine (parallel-set flow) ----
   startHypothesis(goal: string, n?: number): Promise<HypSession>;
   refineHypothesis(hid: string, parentId: string, feedback?: string, n?: number): Promise<HypSession>;
@@ -478,6 +481,10 @@ export function createApi(cfg: ApiConfig): Api {
     gitHistory: async (limit = 200) => mapGit(await req<Raw>(`/git/history?limit=${limit}`)),
 
     getCommit: (sha) => req<CommitDetail>(`/git/commit/${encodeURIComponent(sha)}`),
+
+    versions: () => req<VersionList>("/versions"),
+    activateVersion: (id) =>
+      req<VersionList>(`/versions/${encodeURIComponent(id)}/activate`, { method: "POST" }),
 
     spawnEvolution: (command, base) =>
       req<{ session_id: string; command: string }>("/evolution/commands", {

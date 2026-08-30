@@ -24,6 +24,7 @@ import type {
   RoleSummary,
   SessionFile,
   SessionSummary,
+  VersionList,
 } from "../lib/types";
 
 const TOKEN_KEY = "csk_token";
@@ -114,6 +115,11 @@ interface AppCtx {
   git: GitHistory | null;
   loadGit: () => void;
 
+  // ---- R17 version DAG + switching ----
+  versions: VersionList | null;
+  loadVersions: () => void;
+  activateVersion: (id: string) => Promise<VersionList>;
+
   // ---- hypothesis session (persists across page switches + reload) ----
   hyp: HypSession | null;
   setHyp: (h: HypSession | null) => void;
@@ -183,6 +189,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [roles, setRoles] = useState<RoleSummary[]>([]);
   const [memory, setMemory] = useState<MemoryHit[]>([]);
   const [git, setGit] = useState<GitHistory | null>(null);
+  const [versions, setVersions] = useState<VersionList | null>(null);
   const [hyp, setHypState] = useState<HypSession | null>(null);
 
   // Lives in the store (not the view) so the open hypothesis session survives
@@ -773,6 +780,27 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   }, [api]);
 
+  const loadVersions = useCallback(async () => {
+    try {
+      setVersions(await api.versions());
+    } catch {
+      /* ignore */
+    }
+  }, [api]);
+
+  // Switch the active version, then refresh the DAG + versions so the graph and
+  // the active marker update. Throws on 409 (busy / switch in progress) so the
+  // caller can surface it.
+  const activateVersion = useCallback(
+    async (id: string) => {
+      const vl = await api.activateVersion(id);
+      setVersions(vl);
+      void loadGit();
+      return vl;
+    },
+    [api, loadGit],
+  );
+
   // when a session becomes blocked, pull focus to the approvals tab
   useEffect(() => {
     if (active?.blocked) setRightTab("hitl");
@@ -854,6 +882,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     searchMemory,
     git,
     loadGit,
+    versions,
+    loadVersions,
+    activateVersion,
     hyp,
     setHyp,
     workingHyp,
