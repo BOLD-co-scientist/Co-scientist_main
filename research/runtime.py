@@ -31,8 +31,8 @@ from claude_agent_sdk import (
     ToolUseBlock,
 )
 from claude_agent_sdk.types import HookMatcher
-from scaffold import bus, config_loader, eventlog, hitl, settings, skills, spawn, tools_registry
-from scaffold._atomic import read_json
+from scaffold import bus, config_loader, contract, eventlog, hitl, settings, skills, spawn, tools_registry
+from scaffold._atomic import read_json, write_json
 
 
 SUPERVISOR_AGENT_ID = "supervisor"
@@ -311,6 +311,30 @@ async def run_session(
     rather than an in-memory event, so this can run as a subprocess.
     """
     settings.ensure_session_dirs(session_id)
+
+    # R17: schema-version stamp + read-only guard. A session carries the schema
+    # version of the code that created it. If the ACTIVE code (this subprocess =
+    # the tenant's active version) is OLDER than the session's schema — e.g. the
+    # user rolled back to a version predating a migration — it must not mutate data
+    # it can't fully read: open read-only and let the human fork to continue. A
+    # fresh session stamps the current version. (Additive changes don't bump
+    # SCHEMA_VERSION, so this rarely trips; the compat gate blocks non-additive
+    # merges in the first place — this is the last-resort guard.)
+    schema_path = settings.session_dir(session_id) / "schema.json"
+    _prior_schema = read_json(schema_path, default=None)
+    if isinstance(_prior_schema, dict):
+        _sv = int(_prior_schema.get("schema_version", 1))
+        if _sv > contract.SCHEMA_VERSION:
+            eventlog.append(
+                session_id, actor="system", kind="session.readonly",
+                session_schema=_sv, code_schema=contract.SCHEMA_VERSION,
+                note="session was created by a newer version; fork it to continue on this version",
+            )
+            eventlog.append(session_id, actor="system", kind="session.idle")
+            return
+    else:
+        write_json(schema_path, {"schema_version": contract.SCHEMA_VERSION})
+
     is_first = resume_uuid is None
     if is_first:
         eventlog.append(session_id, actor="system", kind="session.start", task=message)

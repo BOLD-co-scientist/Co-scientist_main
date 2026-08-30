@@ -406,6 +406,27 @@ async def stop_session(sid: str, ctx: UserContext = Depends(_ctx)):
     return {"ok": True}
 
 
+@app.post("/sessions/{sid}/fork")
+def fork_session(sid: str, ctx: UserContext = Depends(_ctx)):
+    """R17: branch a session into a new one continuable on the CURRENT active
+    version. Copies the session dir and drops the schema stamp (re-stamped on the
+    next turn at the current version), so a read-only session — one created by a
+    newer version than the one now active — can be continued after a fork. The
+    original is left untouched (the read-only guard keeps it safe)."""
+    sid = _safe_sid(sid)
+    if not _session_exists(ctx, sid):
+        raise HTTPException(404, "unknown session")
+    new_sid = _safe_sid(_new_session_id())
+    src = ctx.session_dir(sid)
+    dst = ctx.session_dir(new_sid)
+    if dst.exists():
+        raise HTTPException(409, "fork target already exists")
+    shutil.copytree(src, dst)
+    (dst / "schema.json").unlink(missing_ok=True)
+    _append_event(ctx, new_sid, actor="system", kind="session.forked", parent=sid)
+    return {"session_id": new_sid, "parent": sid}
+
+
 @app.post("/research/sessions/{sid}/messages")
 async def post_human_directive(
     sid: str, body: schemas.HumanDirective, ctx: UserContext = Depends(_ctx)
