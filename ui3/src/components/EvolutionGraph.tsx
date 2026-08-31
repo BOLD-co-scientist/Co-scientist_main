@@ -249,8 +249,9 @@ export default function EvolutionCanvas({ onEvolveFrom, onViewConversation }: {
                     onMouseDown={() => { pressSha.current = n.c.sha; }}
                     onMouseEnter={() => nodeEnter(n.c.sha)}
                     onMouseLeave={scheduleClose} />
-                  {/* the label is inert — it never triggers hover/click/drag */}
-                  <foreignObject x={PADX + cols * LANE + 6} y={y - ROW / 2 + 6} width={LABELW - 12} height={ROW - 8} style={{ pointerEvents: "none" }}>
+                  {/* the label sits right beside ITS OWN dot (not a fixed far-right
+                      column), so name↔node stays clear at any graph shape. Inert. */}
+                  <foreignObject x={x + DOT + 10} y={y - ROW / 2 + 6} width={LABELW} height={ROW - 8} style={{ pointerEvents: "none" }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 8px", borderRadius: 8, background: on ? "var(--bg2)" : "transparent", border: `1px solid ${on ? "var(--border-hi)" : "transparent"}`, overflow: "hidden" }}>
                       {isActive(n.c) && <span style={badge("var(--accent)", "#0a0f1c")}>ACTIVE</span>}
                       {isEvo(n.c) && <span style={badge("var(--evo)", "#14091f")}>EVO</span>}
