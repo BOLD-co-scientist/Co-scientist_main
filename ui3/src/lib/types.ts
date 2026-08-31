@@ -131,6 +131,7 @@ export interface Version {
   rationale?: string;
   owner?: string;
   status?: string; // merged | rejected | superseded | ...
+  origin_session?: string | null; // R17: the evolution session that produced this version (its birth story)
   smoke?: { ran: boolean; ok?: boolean };
   created_at?: number;
   archive_dir?: string;

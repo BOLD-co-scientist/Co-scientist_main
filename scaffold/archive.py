@@ -77,6 +77,7 @@ def record_merged_version(
     rationale: str,
     owner: str,
     smoke: dict[str, Any] | None = None,
+    origin_session: str | None = None,
 ) -> dict[str, Any]:
     """Promote a just-merged evolution to a first-class version node.
 
@@ -84,6 +85,11 @@ def record_merged_version(
     the deleted evo branch), writes the node's ``meta.json`` into ``archive_dir``,
     and appends it to ``index.json``. Idempotent on the tag (re-tagging the same
     sha is a no-op). Returns the node dict.
+
+    ``origin_session`` is the evolution session that produced this version — its
+    provenance / "birth story". Stored so the UI can open that conversation from
+    the node (R17). The events themselves live durably under ``state/`` and so
+    survive version switches; this is just the link.
     """
     vid = version_id_from_archive(archive_dir.name)
     tag = _TAG_PREFIX + vid
@@ -106,6 +112,7 @@ def record_merged_version(
         "schema_version": SCHEMA_VERSION,
         "smoke": smoke or {"ran": False},
         "status": "merged",
+        "origin_session": origin_session,
         "created_at": time.time(),
         "archive_dir": archive_dir.name,
         "diff": "diff.patch",
@@ -123,7 +130,7 @@ def _append_to_index(repo: Path, node: dict[str, Any]) -> None:
     # Replace an existing entry with the same id (re-merge), else append.
     versions = [v for v in versions if v.get("id") != node["id"]]
     versions.append(
-        {k: node[k] for k in ("id", "tag", "sha", "base_sha", "summary", "owner", "status", "created_at", "archive_dir")}
+        {k: node[k] for k in ("id", "tag", "sha", "base_sha", "summary", "owner", "status", "origin_session", "created_at", "archive_dir")}
     )
     idx["versions"] = versions
     idx["schema_version"] = SCHEMA_VERSION

@@ -182,6 +182,7 @@ def make_server(session_id: str, wt: sandbox.Worktree):
                     settings.ROOT, archive_dir=archive_dir, head_sha=head,
                     base_sha=wt.base, summary=summary, rationale=rationale,
                     owner=archive.owner_of(settings.ROOT), smoke=smoke_info,
+                    origin_session=session_id,
                 )
                 eventlog.append(session_id, actor="evolution", kind="version.recorded",
                                 ref=str(archive_dir.name), version=node["id"], tag=node["tag"])

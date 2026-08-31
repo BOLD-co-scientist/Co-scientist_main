@@ -87,7 +87,10 @@ function laneColor(i: number): string {
 
 type Pop = { sha: string; pinned: boolean };
 
-export default function EvolutionCanvas({ onEvolveFrom }: { onEvolveFrom: (sha: string, label: string) => void }) {
+export default function EvolutionCanvas({ onEvolveFrom, onViewConversation }: {
+  onEvolveFrom: (sha: string, label: string) => void;
+  onViewConversation: (sid: string, label: string) => void;
+}) {
   const { git, loadGit, versions, loadVersions, activateVersion } = useApp();
   const [expanded, setExpanded] = useState(false);
   const [pop, setPop] = useState<Pop | null>(null);
@@ -130,6 +133,7 @@ export default function EvolutionCanvas({ onEvolveFrom }: { onEvolveFrom: (sha: 
 
   const nodeColor = (c: GitCommit) =>
     isActive(c) ? "var(--accent)" : isVersion(c) ? "var(--grn)" : isEvo(c) ? "var(--evo)"
+      : c.parents.length === 0 ? "var(--grn)" // the v0 root is a switchable baseline version
       : c.parents.length > 1 ? "var(--accent)" : "var(--mid)";
 
   const cancelClose = () => { if (closeTimer.current) { clearTimeout(closeTimer.current); closeTimer.current = null; } };
@@ -227,7 +231,9 @@ export default function EvolutionCanvas({ onEvolveFrom }: { onEvolveFrom: (sha: 
               const x = PADX + n.col * LANE, y = PADY + n.row * ROW;
               const on = pop?.sha === n.c.sha;
               const color = nodeColor(n.c);
-              const isVer = isActive(n.c) || isVersion(n.c) || isEvo(n.c);
+              // The v0 root is a switchable baseline, so it reads as a version node
+              // (large, filled) — not a plain commit.
+              const isVer = isActive(n.c) || isVersion(n.c) || isEvo(n.c) || n.c.parents.length === 0;
               // A plain commit reads as a smaller, hollow dot; a version/active/evo
               // node is a larger filled dot.
               const r = isVer ? DOT : DOT - 2;
@@ -248,7 +254,7 @@ export default function EvolutionCanvas({ onEvolveFrom }: { onEvolveFrom: (sha: 
                     <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 8px", borderRadius: 8, background: on ? "var(--bg2)" : "transparent", border: `1px solid ${on ? "var(--border-hi)" : "transparent"}`, overflow: "hidden" }}>
                       {isActive(n.c) && <span style={badge("var(--accent)", "#0a0f1c")}>ACTIVE</span>}
                       {isEvo(n.c) && <span style={badge("var(--evo)", "#14091f")}>EVO</span>}
-                      <span style={{ fontSize: 12.5, color: on ? "var(--mid)" : "var(--lo)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
+                      <span style={{ fontSize: 12.5, color: on ? "var(--hi)" : isVer ? "var(--mid)" : "var(--lo)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
                     </div>
                   </foreignObject>
                 </g>
@@ -292,6 +298,7 @@ export default function EvolutionCanvas({ onEvolveFrom }: { onEvolveFrom: (sha: 
           onClose={() => setPop(null)}
           onActivate={activateVersion}
           onEvolveFrom={onEvolveFrom}
+          onViewConversation={onViewConversation}
         />
       )}
     </div>
@@ -317,13 +324,14 @@ const POP_W = 320, POP_GAP = 16;
 // (vertical logic unchanged). The horizontal gap guarantees it never covers the
 // node dot. Height is measured, so centring + bottom-clamp use the real box.
 function NodePopover({
-  nodeX, nodeY, c, version, active, isEvo, onEnter, onLeave, onClose, onActivate, onEvolveFrom,
+  nodeX, nodeY, c, version, active, isEvo, onEnter, onLeave, onClose, onActivate, onEvolveFrom, onViewConversation,
 }: {
   nodeX: number; nodeY: number;
   c: GitCommit; version: Version | null; active: boolean; isEvo: boolean;
   onEnter: () => void; onLeave: () => void; onClose: () => void;
   onActivate: (id: string) => Promise<unknown>;
   onEvolveFrom: (sha: string, label: string) => void;
+  onViewConversation: (sid: string, label: string) => void;
 }) {
   const box = useRef<HTMLDivElement | null>(null);
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
@@ -407,6 +415,13 @@ function NodePopover({
         <div style={{ marginTop: 12, fontSize: 10.5, color: "var(--lo)", lineHeight: 1.4 }}>
           Inspect-only — activate or evolve from a version node.
         </div>
+      )}
+      {/* R17 provenance: open the evolution conversation that produced this version */}
+      {version?.origin_session && (
+        <button onClick={() => onViewConversation(version.origin_session!, version.summary || short(c.sha))}
+          style={{ width: "100%", marginTop: 7, padding: 8, borderRadius: 8, fontWeight: 600, fontSize: 12, background: "var(--bg2)", color: "var(--mid)", border: "1px solid var(--border)" }}>
+          View conversation ↗
+        </button>
       )}
       {note && <div style={{ marginTop: 7, fontSize: 11, color: "var(--err)" }}>{note}</div>}
     </div>
