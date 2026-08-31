@@ -87,7 +87,7 @@ interface AppCtx {
   evoRunning: boolean;
   evolutionCommand: string;
   setEvolutionCommand: (command: string) => void;
-  startEvolution: (command: string) => Promise<void>;
+  startEvolution: (command: string, base?: string) => Promise<void>;
   answerEvo: (requestId: string, decision: "approve" | "reject", note?: string) => Promise<void>;
 
   // ---- R16: reflection for the active research session. `reflection` seeds the
@@ -645,11 +645,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   // ---- evolution actions ----
   const startEvolution = useCallback(
-    async (command: string) => {
+    // `base` (R17): branch the evolution from a specific node instead of the
+    // active tip. Either way the new evo-* session is adopted as the drawer's
+    // channel — it is NEVER routed into the research session rail.
+    async (command: string, base?: string) => {
       const cmd = command.trim();
       if (!cmd) return;
       try {
-        const { session_id } = await api.spawnEvolution(cmd);
+        const { session_id } = await api.spawnEvolution(cmd, base);
         localStorage.setItem(EVO_KEY, session_id);
         setEvoEvents([]);
         setEvoPending([]);
