@@ -126,6 +126,17 @@ def ensure_user_root(user_id: str) -> Path:
     if fixtures_src.exists() and not fixtures_dst.exists():
         shutil.copytree(fixtures_src, fixtures_dst, ignore=ignore)
 
+    # R17: seed base skills into the tenant's `.claude/skills`. Skills are durable,
+    # cross-version *assets* (like memory/results), NOT version-bound harness —
+    # `.claude/skills/` is gitignored, so a checkout never swaps them and this seed
+    # stays out of the version. Only skills are copied (not the whole `.claude`,
+    # which holds non-tenant tooling). No base skills ship yet — this is the seam
+    # that carries them once they do.
+    base_skills_src = settings.ROOT / ".claude" / "skills"
+    base_skills_dst = root / ".claude" / "skills"
+    if base_skills_src.exists() and not base_skills_dst.exists():
+        shutil.copytree(base_skills_src, base_skills_dst, ignore=ignore)
+
     _ensure_runtime_dirs(root)
     _ensure_git_repo(root)
     marker.write_text("This is a per-user coscientist harness root.\n", encoding="utf-8")
