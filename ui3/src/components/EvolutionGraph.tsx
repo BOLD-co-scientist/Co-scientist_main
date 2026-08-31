@@ -19,43 +19,64 @@ const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v
 interface Node { c: GitCommit; row: number; col: number; }
 interface Edge { fromCol: number; fromRow: number; toCol: number; toRow: number; }
 
-function layout(commits: GitCommit[]): { nodes: Node[]; edges: Edge[]; cols: number } {
-  const rowOf: Record<string, number> = {};
-  commits.forEach((c, i) => (rowOf[c.sha] = i));
-  const lanes: (string | null)[] = [];
-  const freeLane = () => {
-    const i = lanes.indexOf(null);
-    if (i >= 0) return i;
-    lanes.push(null);
-    return lanes.length - 1;
+// Tidy-tree layout (Reingold–Tilford, simplified): root at TOP, generations flow
+// DOWN, children fan out SYMMETRICALLY and are centred under their parent so you
+// can always read which parent a node was born from. Lineage is essentially a
+// tree (each version has one primary parent); the rare merge (2nd parent) is laid
+// out under its FIRST parent and its extra edge drawn as a cross-link.
+//   row = longest-path depth from a root  → a child always sits below every ancestor
+//   col = tidy x: leaves get sequential slots, each parent centres over its kids
+function layout(commits: GitCommit[]): { nodes: Node[]; edges: Edge[]; cols: number; rows: number } {
+  const bySha = new Map(commits.map((c) => [c.sha, c]));
+  const parentsOf = (c: GitCommit) => c.parents.filter((p) => bySha.has(p));
+  const idx = new Map(commits.map((c, i) => [c.sha, i])); // 0 = newest (git log order)
+  // spanning tree: each node hangs off its FIRST in-set parent
+  const primParent = new Map<string, string | null>();
+  const kids = new Map<string, string[]>();
+  commits.forEach((c) => kids.set(c.sha, []));
+  for (const c of commits) {
+    const pp = parentsOf(c)[0] ?? null;
+    primParent.set(c.sha, pp);
+    if (pp) kids.get(pp)!.push(c.sha);
+  }
+  // depth = longest path from a root (no in-set parent); memoised DFS up the parents
+  const depth = new Map<string, number>();
+  const computeDepth = (sha: string, stack: Set<string>): number => {
+    const cached = depth.get(sha);
+    if (cached !== undefined) return cached;
+    if (stack.has(sha)) return 0;
+    stack.add(sha);
+    const ps = parentsOf(bySha.get(sha)!);
+    const d = ps.length === 0 ? 0 : 1 + Math.max(...ps.map((p) => computeDepth(p, stack)));
+    stack.delete(sha);
+    depth.set(sha, d);
+    return d;
   };
-  const nodes: Node[] = [];
-  let maxCol = 0;
-  commits.forEach((c, row) => {
-    let col = lanes.indexOf(c.sha);
-    if (col === -1) { col = freeLane(); lanes[col] = c.sha; }
-    for (let i = 0; i < lanes.length; i++) if (i !== col && lanes[i] === c.sha) lanes[i] = null;
-    nodes.push({ c, row, col });
-    maxCol = Math.max(maxCol, col);
-    const parents = c.parents.filter((p) => p in rowOf);
-    if (parents.length === 0) { lanes[col] = null; }
-    else {
-      lanes[col] = parents[0];
-      for (let k = 1; k < parents.length; k++) { const pl = freeLane(); lanes[pl] = parents[k]; }
-    }
-  });
-  const nodeByRow = new Map(nodes.map((n) => [n.row, n]));
+  for (const c of commits) computeDepth(c.sha, new Set());
+  // older sibling to the LEFT (larger idx = older, since 0 = newest)
+  const sortKids = (a: string, b: string) => idx.get(b)! - idx.get(a)!;
+  const x = new Map<string, number>();
+  let cursor = 0;
+  const assignX = (sha: string) => {
+    const ks = kids.get(sha)!.slice().sort(sortKids);
+    if (ks.length === 0) { x.set(sha, cursor++); return; }
+    for (const k of ks) assignX(k);
+    const xs = ks.map((k) => x.get(k)!);
+    x.set(sha, (Math.min(...xs) + Math.max(...xs)) / 2);
+  };
+  const roots = commits.filter((c) => !primParent.get(c.sha)).map((c) => c.sha).sort(sortKids);
+  for (const r of roots) { assignX(r); cursor += 1; } // gap between root subtrees
+  const nodes: Node[] = commits.map((c) => ({ c, row: depth.get(c.sha)!, col: x.get(c.sha)! }));
+  const nodeBySha = new Map(nodes.map((n) => [n.c.sha, n]));
   const edges: Edge[] = [];
-  for (const n of nodes) {
-    for (const p of n.c.parents) {
-      const pr = rowOf[p];
-      if (pr === undefined) continue;
-      const pn = nodeByRow.get(pr);
-      if (!pn) continue;
+  for (const n of nodes)
+    for (const p of parentsOf(n.c)) {
+      const pn = nodeBySha.get(p)!;
       edges.push({ fromCol: n.col, fromRow: n.row, toCol: pn.col, toRow: pn.row });
     }
-  }
-  return { nodes, edges, cols: maxCol + 1 };
+  const cols = Math.max(0, ...nodes.map((n) => n.col)) + 1;
+  const rows = Math.max(0, ...nodes.map((n) => n.row)) + 1;
+  return { nodes, edges, cols, rows };
 }
 
 function collapse(commits: GitCommit[], keep: Set<string>): GitCommit[] {
@@ -78,7 +99,7 @@ function collapse(commits: GitCommit[], keep: Set<string>): GitCommit[] {
   }));
 }
 
-const LANE = 26, ROW = 58, PADX = 26, PADY = 26, DOT = 6, HIT = 13, LABELW = 300;
+const LANE = 132, ROW = 78, PADX = 80, PADY = 34, DOT = 6, HIT = 14;
 
 function laneColor(i: number): string {
   const p = ["var(--grn)", "var(--evo)", "var(--cyan)", "var(--accent)", "var(--lav)", "var(--warn)"];
@@ -128,7 +149,7 @@ export default function EvolutionCanvas({ onEvolveFrom, onViewConversation }: {
     return collapse(allCommits, keep);
   }, [allCommits, expanded, isVersion, isEvo, isActive]);
 
-  const { nodes, edges, cols } = useMemo(() => layout(commits), [commits]);
+  const { nodes, edges, cols, rows } = useMemo(() => layout(commits), [commits]);
   const hiddenCount = allCommits.length - commits.length;
 
   const nodeColor = (c: GitCommit) =>
@@ -220,12 +241,12 @@ export default function EvolutionCanvas({ onEvolveFrom, onViewConversation }: {
         </div>
       ) : (
         <div style={{ position: "absolute", left: 0, top: 0, transform: `translate(${t.x}px,${t.y}px) scale(${t.k})`, transformOrigin: "0 0" }}>
-          <svg width={PADX * 2 + cols * LANE + LABELW} height={PADY * 2 + Math.max(1, nodes.length) * ROW} style={{ display: "block" }}>
+          <svg width={PADX * 2 + Math.max(1, cols) * LANE} height={PADY * 2 + Math.max(1, rows) * ROW} style={{ display: "block" }}>
             {edges.map((e, i) => {
               const x1 = PADX + e.fromCol * LANE, y1 = PADY + e.fromRow * ROW;
               const x2 = PADX + e.toCol * LANE, y2 = PADY + e.toRow * ROW;
               const my = (y1 + y2) / 2;
-              return <path key={i} d={`M${x1},${y1} C${x1},${my} ${x2},${my} ${x2},${y2}`} fill="none" stroke={laneColor(e.toCol)} strokeWidth={2} opacity={0.5} />;
+              return <path key={i} d={`M${x1},${y1} C${x1},${my} ${x2},${my} ${x2},${y2}`} fill="none" stroke={laneColor(Math.round(e.toCol))} strokeWidth={2} opacity={0.45} />;
             })}
             {nodes.map((n) => {
               const x = PADX + n.col * LANE, y = PADY + n.row * ROW;
@@ -249,13 +270,18 @@ export default function EvolutionCanvas({ onEvolveFrom, onViewConversation }: {
                     onMouseDown={() => { pressSha.current = n.c.sha; }}
                     onMouseEnter={() => nodeEnter(n.c.sha)}
                     onMouseLeave={scheduleClose} />
-                  {/* the label sits right beside ITS OWN dot (not a fixed far-right
-                      column), so name↔node stays clear at any graph shape. Inert. */}
-                  <foreignObject x={x + DOT + 10} y={y - ROW / 2 + 6} width={LABELW} height={ROW - 8} style={{ pointerEvents: "none" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 8px", borderRadius: 8, background: on ? "var(--bg2)" : "transparent", border: `1px solid ${on ? "var(--border-hi)" : "transparent"}`, overflow: "hidden" }}>
-                      {isActive(n.c) && <span style={badge("var(--accent)", "#0a0f1c")}>ACTIVE</span>}
-                      {isEvo(n.c) && <span style={badge("var(--evo)", "#14091f")}>EVO</span>}
-                      <span style={{ fontSize: 12.5, color: on ? "var(--hi)" : isVer ? "var(--mid)" : "var(--lo)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
+                  {/* label sits CENTRED UNDER its own dot — a tidy-tree reads top
+                      to bottom, so a caption beneath each node keeps name↔node
+                      unambiguous even when siblings share a row. Full text is in
+                      the hover popover; here it's truncated to the slot. Inert. */}
+                  <foreignObject x={x - LANE / 2} y={y + DOT + 5} width={LANE} height={ROW - DOT - 12} style={{ pointerEvents: "none" }}>
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3, padding: "3px 6px", borderRadius: 8, background: on ? "var(--bg2)" : "transparent", border: `1px solid ${on ? "var(--border-hi)" : "transparent"}`, overflow: "hidden" }}>
+                      {(isActive(n.c) || isEvo(n.c)) && (
+                        <span style={badge(isActive(n.c) ? "var(--accent)" : "var(--evo)", isActive(n.c) ? "#0a0f1c" : "#14091f")}>
+                          {isActive(n.c) ? "ACTIVE" : "IN-FLIGHT"}
+                        </span>
+                      )}
+                      <span style={{ maxWidth: "100%", fontSize: 12, textAlign: "center", color: on ? "var(--hi)" : isVer ? "var(--mid)" : "var(--lo)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
                     </div>
                   </foreignObject>
                 </g>
