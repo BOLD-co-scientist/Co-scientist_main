@@ -190,17 +190,17 @@ Two properties, two mechanisms:
 
 ## Steps
 
-- [ ] 1. Land this design doc + add R17 to [ROADMAP.md](../../ROADMAP.md) (🟢 Now). Commit.
+- [x] 1. Land this design doc + add R17 to [ROADMAP.md](../../ROADMAP.md) (🟢 Now). Commit.
 - [x] 2. **Skills = durable Tier-3 asset (NOT version-bound) for R17** — decision reversed (pass 6, see Open questions). Skill authoring keeps the R7 flow (save on HITL approval, audit under `state/archive/skills`); `.claude/skills/` is **gitignored** so a checkout never swaps it (satisfies "switch out and back = unchanged" trivially, exactly like `state/`). No commit, no `ver/` tag, no lineage node. Base-skill seed at bootstrap retained (into the gitignored dir). Two open concerns (cross-user completeness, accumulation) parked for post-R17.
-- [ ] 3. **Contract registry**: add `scaffold/contract.py` declaring `SCHEMA_VERSION`, the durable-schema list, and the anchors. No behavior change yet — just the explicit declaration.
-- [ ] 4. **Version identity**: on merge, tag each merged node `ver/<id>` instead of deleting the branch; stop forcing `main` linear where it blocks a real DAG. Update `propose_merge.py` + `sandbox.py`.
-- [ ] 5. **Archive manifest**: write per-node `meta.json` + top-level `index.json` under `state/archive/evolutions/`; backfill from existing archive folders + git tags. Read-only API to list the version DAG (extend `/git/history` or add `/versions`).
-- [ ] 6. **Switch operation**: an API endpoint + evolution/CLI path to `checkout` a `ver/<id>` (idle-guarded, never mid-turn); records the active version in the manifest. No `state/` writes during switch.
-- [ ] 7. **Session continuity across switch**: `schema_version` stamp on new sessions; validating loader opens too-new sessions read-only; **fork-to-continue** action (copy session dir → new sid on current version, original preserved).
-- [ ] 8. **Golden-fixture compat gate**: `tests/fixtures/golden/` + `tests/test_contract_compat.py`; wire it into `propose_merge`'s smoke gate so contract-breaking merges auto-reject.
-- [ ] 9. **UI**: make the existing evolution graph nodes actionable ("activate this version"), show the active version, and surface read-only/fork state on sessions. (UI is free to change — no cross-version constraint.)
-- [ ] 10. Sweep bugs: duplicate-message render, B2 note truncation.
-- [ ] 11. Backend verification pass (curl-driven) per the CLAUDE.md verification policy; then a switch-and-back byte-identical check on real `state/`.
+- [x] 3. **Contract registry**: `scaffold/contract.py` declares `SCHEMA_VERSION`, the durable-schema list, and the anchors.
+- [x] 4. **Version identity**: on merge, tag each merged node `ver/<id>` (archive.record_merged_version). `main`/`master` is just a pointer; active = HEAD.
+- [~] 5. **Archive manifest**: per-node `meta.json` + `index.json` under `state/archive/evolutions/` ✅; `/versions` read API ✅; provenance `origin_session` ✅. **Remaining: backfill** manifest+tag for pre-R17 merged evolutions (old tenants with archive folders but no meta/tag).
+- [x] 6. **Switch operation**: `POST /versions/{id}/activate` (detached checkout), idle-guarded + switch-lock; no `state/` writes.
+- [x] 7. **Session continuity across switch**: `schema_version` stamp on new sessions; too-new sessions open read-only (runtime guard); **fork-to-continue** endpoint + UI banner/button. Verified end-to-end.
+- [x] 8. **Golden-fixture compat gate**: `tests/fixtures/golden_v1.json` + `tests/test_contract_compat.py`, wired into `propose_merge`'s smoke gate.
+- [x] 9. **UI**: zoomable lineage canvas, node modal, Activate/Evolve-from (gated to versions), active-version marker, provenance "View conversation", read-only banner + fork button. (D2 in-flight→ended node = follow-up todo.)
+- [x] 10. Sweep bugs: duplicate-message render (delegated to `fix/ui3-bugs`); B2 note truncation — **not reproducing** (evolution.note renders full in a wrapping spine, no backend/frontend cap).
+- [ ] 11. Backend verification pass (curl-driven) + a switch-and-back byte-identical check on real `state/`; then the PR.
 
 ## Files touched
 
