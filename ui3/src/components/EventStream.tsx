@@ -41,7 +41,7 @@ function buildUnits(evs: Ev[]): Unit[] {
 }
 
 export default function EventStream() {
-  const { active, status, events, hasPending, pending, setRightTab, stop, forkSession, workingHyp, clearWorkingHyp, setMainView, draftNew, reflectionNudge, dismissReflection, setEvolutionCommand } = useApp();
+  const { active, status, events, hasPending, pending, setRightTab, stop, workingHyp, clearWorkingHyp, setMainView, draftNew, reflectionNudge, dismissReflection, setEvolutionCommand } = useApp();
   const scRef = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   // Default timeline hides low-signal system events (see isSystemNoise). ⌘/Ctrl-O
@@ -170,17 +170,15 @@ export default function EventStream() {
         )}
       </div>
 
-      {/* R17: read-only banner — this session was created by a newer version than
-          the one now active, so it opens read-only. Fork to continue here. */}
+      {/* R17: read-only indicator (display-only for now). A session created by a
+          newer version than the one now active opens read-only. The recovery UX
+          (fork, or something else) is deliberately deferred until we actually hit
+          this case and can design it from experience — see the R17 doc. */}
       {active.readonly && (
         <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 24px", background: "var(--warn-soft, var(--bg2))", borderBottom: "1px solid var(--border)" }}>
           <span style={{ flex: 1, fontSize: 12.5, color: "var(--mid)", lineHeight: 1.4 }}>
-            <b style={{ color: "var(--hi)", fontWeight: 600 }}>Read-only.</b> This session was created by a newer version than the one now active — it can't run here. Fork it to continue on the current version (the original is preserved).
+            <b style={{ color: "var(--hi)", fontWeight: 600 }}>Read-only.</b> This session was created by a newer version than the one now active, so it can't run here. Switch to a version that can read it, or start a new session.
           </span>
-          <button onClick={() => void forkSession(active.session_id)}
-            style={{ flex: "0 0 auto", padding: "7px 14px", background: "var(--accent)", color: "#0a0f1c", borderRadius: 8, fontSize: 12.5, fontWeight: 700 }}>
-            Fork to continue
-          </button>
         </div>
       )}
 
