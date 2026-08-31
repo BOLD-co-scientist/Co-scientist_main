@@ -58,6 +58,7 @@ interface AppCtx {
   status: StatusView | null;
   select: (sid: string) => void;
   createSession: (task: string) => void;
+  forkSession: (sid: string) => Promise<void>;
   refreshSessions: () => Promise<void>;
   draftNew: boolean;
   startNewSession: () => void;
@@ -529,6 +530,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     [api, refreshSessions, select, withHyp],
   );
 
+  // R17: fork a read-only session (created by a newer version) into a fresh one
+  // continuable on the active version. The copy drops the schema stamp so the
+  // next turn re-stamps it; the original is left untouched.
+  const forkSession = useCallback(
+    async (sid: string) => {
+      try {
+        const { session_id } = await api.forkSession(sid);
+        await refreshSessions();
+        select(session_id);
+      } catch {
+        /* ignore */
+      }
+    },
+    [api, refreshSessions, select],
+  );
+
   // "New session" opens an empty compose view (no backend session yet); the
   // first message the user sends creates the real session.
   const startNewSession = useCallback(() => {
@@ -843,6 +860,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     status,
     select,
     createSession,
+    forkSession,
     refreshSessions,
     draftNew,
     startNewSession,

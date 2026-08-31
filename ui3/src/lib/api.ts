@@ -36,6 +36,7 @@ export interface Api {
     onError?: (e: unknown) => void,
   ): StreamHandle;
   createSession(task: string): Promise<{ session_id: string; task: string }>;
+  forkSession(sid: string): Promise<{ session_id: string; parent: string }>;
   sendMessage(sid: string, text: string): Promise<SendResult>;
   interject(sid: string, text: string): Promise<{ ok: boolean; queued: boolean }>;
   stop(sid: string): Promise<{ ok: boolean }>;
@@ -342,6 +343,9 @@ export function createApi(cfg: ApiConfig): Api {
         method: "POST",
         body: JSON.stringify({ task }),
       }),
+
+    forkSession: (sid) =>
+      req<{ session_id: string; parent: string }>(`/sessions/${sid}/fork`, { method: "POST" }),
 
     async sendMessage(sid, text): Promise<SendResult> {
       const token = cfg.getToken();

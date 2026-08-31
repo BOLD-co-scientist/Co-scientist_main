@@ -41,7 +41,7 @@ function buildUnits(evs: Ev[]): Unit[] {
 }
 
 export default function EventStream() {
-  const { active, status, events, hasPending, pending, setRightTab, stop, workingHyp, clearWorkingHyp, setMainView, draftNew, reflectionNudge, dismissReflection, setEvolutionCommand } = useApp();
+  const { active, status, events, hasPending, pending, setRightTab, stop, forkSession, workingHyp, clearWorkingHyp, setMainView, draftNew, reflectionNudge, dismissReflection, setEvolutionCommand } = useApp();
   const scRef = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   // Default timeline hides low-signal system events (see isSystemNoise). ⌘/Ctrl-O
@@ -169,6 +169,20 @@ export default function EventStream() {
           </button>
         )}
       </div>
+
+      {/* R17: read-only banner — this session was created by a newer version than
+          the one now active, so it opens read-only. Fork to continue here. */}
+      {active.readonly && (
+        <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 24px", background: "var(--warn-soft, var(--bg2))", borderBottom: "1px solid var(--border)" }}>
+          <span style={{ flex: 1, fontSize: 12.5, color: "var(--mid)", lineHeight: 1.4 }}>
+            <b style={{ color: "var(--hi)", fontWeight: 600 }}>Read-only.</b> This session was created by a newer version than the one now active — it can't run here. Fork it to continue on the current version (the original is preserved).
+          </span>
+          <button onClick={() => void forkSession(active.session_id)}
+            style={{ flex: "0 0 auto", padding: "7px 14px", background: "var(--accent)", color: "#0a0f1c", borderRadius: 8, fontSize: 12.5, fontWeight: 700 }}>
+            Fork to continue
+          </button>
+        </div>
+      )}
 
       {/* pinned HITL banner */}
       {hasPending && (

@@ -18,7 +18,7 @@ import uuid
 import yaml
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
-from scaffold import archive, sandbox, settings
+from scaffold import archive, contract, sandbox, settings
 from scaffold._atomic import append_jsonl, read_json, write_json
 
 from . import schemas
@@ -504,6 +504,11 @@ def list_sessions(ctx: UserContext = Depends(_ctx)):
                     last_ts = rec.get("ts")
             except Exception:
                 last_kind = "unreadable"
+        # R17: a session stamped by a newer schema than this version can read is
+        # read-only here (the runtime guard opens it read-only). Surface it so the
+        # UI can show a banner + offer fork-to-continue.
+        _schema = read_json(sd / "schema.json", default=None)
+        readonly = isinstance(_schema, dict) and int(_schema.get("schema_version", 1)) > contract.SCHEMA_VERSION
         out.append(
             schemas.SessionSummary(
                 session_id=sd.name,
@@ -512,6 +517,7 @@ def list_sessions(ctx: UserContext = Depends(_ctx)):
                 last_ts=last_ts,
                 last_kind=last_kind,
                 running=_monitor_key(ctx, sd.name) in _RUNNING,
+                readonly=readonly,
             )
         )
     return out

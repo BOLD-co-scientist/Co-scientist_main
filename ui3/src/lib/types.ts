@@ -24,6 +24,8 @@ export interface SessionSummary {
   session_id: string;
   task: string;
   running: boolean;
+  /** R17: created by a newer schema than the active version can read → opens read-only. */
+  readonly?: boolean;
   /** Present when the agent is waiting on a HITL decision. */
   blocked?: boolean;
   status?: SessionStatus;

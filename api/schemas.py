@@ -40,6 +40,9 @@ class SessionSummary(BaseModel):
     last_ts: str | None = None
     last_kind: str | None = None
     running: bool = False
+    # R17: True when the session was stamped by a NEWER schema than the active
+    # version can read — it opens read-only and must be forked to continue.
+    readonly: bool = False
 
 
 class HumanDirective(BaseModel):
