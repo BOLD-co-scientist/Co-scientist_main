@@ -180,6 +180,44 @@ Two properties, two mechanisms:
 
 ---
 
+## Open design questions — evolution conversation model (R18-facing, NOT implemented; here for review/comment)
+
+These surfaced while polishing the R17 lineage. **None is built in R17** — R17 keeps evolution one-shot (a command → a fresh subprocess → at most one merge). Recording the options so the PR can carry the discussion.
+
+### DQ1 — session ↔ node ↔ edge coupling (how a conversation maps to the version tree)
+
+Today `origin_session` stores exactly **one** session id per version node, and evolution is one-shot, so the mapping is already **1:1**. The question is what it should be once evolution becomes multi-turn.
+
+- **Option A — 1:1:1 (session = one edge = one node). RECOMMENDED.** A conversation's whole job is to produce *one* version; approving the merge ends it. "Continue evolving" from any node = **Evolve-from** = a *new* session based at that node's commit.
+  - *Provenance:* "View conversation" from any node shows its full, single session — never a slice.
+  - *Continue-from-middle:* no conversation fork needed — you branch a fresh session from the chosen commit; the old session stays an immutable read-only record.
+  - *Cost:* loses "keep chatting and it keeps evolving" continuity — recovered cheaply by "Evolve from latest node" (optionally seeding the new session with the prior context).
+  - *Implementation:* zero change to the current data model.
+- **Option B — 1 session : N nodes (a conversation walks down a branch, each merge crystallizes a node).** Richer "continuous chat" feel, but forces two complications the reviewer should weigh: **provenance slicing** (a middle node maps to only the segment of the thread between the previous and this merge, not the whole session) and **conversation fork** (continuing from a middle node = resuming the thread at a past point). Both are avoided by Option A.
+- **Option C — session = one edge only, no post-merge continuation, but SDK-resume chained across sessions for UX continuity.** A hybrid; reintroduces mild slicing. Least motivated.
+
+### DQ2 — node status vs node style
+
+- **Style (shape/size) = KIND** (version vs plain commit vs root) — unchanged by status.
+- **Status is orthogonal**, shown via colour/animation/badge, not shape:
+  - `running` — a subprocess is actively working.
+  - `awaiting` — the agent answered/asked and is waiting for the human (only exists once multi-turn lands; no such state today).
+  - `closed` — the session is terminal, no more turns. Two flavours: **closed+merged** (produced a version node — the happy path) and **closed+no-merge** (abandoned; under Option A leaves *no* node, only an archived conversation in the event log).
+
+### DQ3 — ended-without-merge evolution ("zombie" in-flight node) — DEFERRED, current behaviour KEPT
+
+An `evo/*` branch whose evolution ends without a merge currently shows as a purple **in-flight node forever** — because [`evolution/runtime.py`](../../evolution/runtime.py) commits an "in progress" commit at start ([mark_start](../../evolution/runtime.py)) and the UI derives in-flight from the `evo` git ref, not from `evolution.end` (which *does* always fire). Options considered:
+
+- **Keep current in-flight style (CHOSEN for now, per user 2026-09-01).** Leave the zombie as-is; be aware of it. The future conversation-session model (DQ1/DQ2) may couple session↔node differently, so don't pre-commit a node-status model yet.
+- **Clean up to no node.** On clean end without a merge, delete the throwaway `evo/*` branch + its "in progress" commit + worktree → no lineage residue (satisfies "no special residue"); keep only on *error* for inspection. Model-agnostic; ~10 lines. Not chosen now — revisit with DQ1/DQ2.
+- **Grey "ended" node (version-level, evolve-able, not switchable).** Rejected for now: pre-commits to "abandoned attempts are first-class nodes," a DQ2 decision we want to defer.
+
+### DQ4 — evolution multi-turn conversation (the R18 milestone)
+
+Making the evolution agent conversational (asks a clarifying question → human replies → continues, with chat-bubble rendering and readable tool/worktree-edit log events) is a substantial capability change beyond R17's "archive & switching." Proposed as its own milestone (**R18**), designed from DQ1–DQ3, with the presentation polish (bubbles, human-readable edit logs) batched into the unified session-UX pass.
+
+---
+
 ## Bugs to sweep (opportunistic, while touching these surfaces)
 
 - **Skills are written but never committed → limbo.** Skills are Tier-2 harness (version-bound), correctly on the code side, but R7 `skills.save_skill` writes `root/.claude/skills/*` at runtime **without committing** — so an authored skill is uncommitted working-tree state that a `git checkout` would clobber. Fix: **authoring a skill commits it into the active version** (a lightweight evolution; HITL-gated already), and base skills are tracked + seeded at tenant bootstrap (`_COPY_DIRS` currently omits `.claude`). Then skills travel with the version exactly like prompts. **Prerequisite for correct version switching.**
@@ -200,7 +238,7 @@ Two properties, two mechanisms:
 - [x] 8. **Golden-fixture compat gate**: `tests/fixtures/golden_v1.json` + `tests/test_contract_compat.py`, wired into `propose_merge`'s smoke gate.
 - [x] 9. **UI**: zoomable lineage canvas, node modal, Activate/Evolve-from (gated to versions), active-version marker, provenance "View conversation", read-only banner + fork button. (D2 in-flight→ended node = follow-up todo.)
 - [x] 10. Sweep bugs: duplicate-message render (delegated to `fix/ui3-bugs`); B2 note truncation — **not reproducing** (evolution.note renders full in a wrapping spine, no backend/frontend cap).
-- [ ] 11. Backend verification pass (curl-driven) + a switch-and-back byte-identical check on real `state/`; then the PR.
+- [~] 11. Backend verification pass (curl-driven) ✅ + switch-and-back byte-identical check ✅ (pass 8: all 9 switch boundaries verified on a fresh branching tenant, `state/` sha256-identical across an ALPHA→GAMMA→BETA→ALPHA loop). **Remaining: the PR** (design questions DQ1–DQ4 recorded for reviewer comment).
 
 ## Files touched
 
@@ -229,6 +267,24 @@ Two properties, two mechanisms:
 - **Merge gate:** a proposal that breaks a golden fixture is `auto_rejected` before HITL; worktree preserved.
 - Curl-driven backend pass over the new `/versions` + switch endpoints; `pytest tests/test_smoke_v0.py -q` + the new compat test green.
 
+### Switch-boundary stress — VERIFIED 2026-09-01
+
+Fresh tenant `r17-switch-stress` (`u_7cf84ddb9dee141a`) with a **branching** tree built cheaply (direct commits+tags, no agent spend): `root → ALPHA → BETA` and `root → GAMMA`, each carrying a distinct tracked sentinel file. Every boundary of the switch contract exercised over curl:
+
+| # | Boundary | Result |
+|---|---|---|
+| B1 | activate swaps the tracked working tree | ✅ sentinel = ALPHA/BETA/GAMMA per active node |
+| B2 | durable `root/state/` byte-identical across ALPHA→GAMMA→BETA→ALPHA | ✅ sha256 identical before/after |
+| B3 | dirty **tracked** tree blocks the checkout | ✅ 409 "checkout failed"; restored → clean |
+| B3′ | untracked marker (`.coscientist-user-root`) does **not** block | ✅ switches succeed with it present |
+| B4 | nonexistent version id | ✅ 409 "unknown version" |
+| B4′ | invalid id (`bad$id!`) / path-traversal (`../evil`) | ✅ 400 / 404 — never reaches checkout |
+| B5 | cross-branch switch (GAMMA branch → BETA branch) | ✅ data preserved |
+| B6 | `switch_lock` blocks a NEW spawn mid-checkout | ✅ `POST /research/sessions` → 409 while lock held (all spawn paths call `_guard_not_switching`) |
+| B7 | busy-guard: activate while a real turn runs | ✅ 409 "stop the running turn"; **a live research turn leaves the tracked tree clean** → normal data flow never trips B3 |
+
+**Design boundary found (benign):** a switch is a `git checkout --detach`, so it refuses on a *dirty tracked* tree. Verified that neither bootstrap (untracked marker only) nor a live research turn dirties tracked code — durable writes all land under gitignored `root/state/`. So the only way to hit B3 in practice is an evolution/edit that leaves uncommitted tracked changes; the guard returns a clear 409 rather than a half-swap. This substantiates Check-1 (byte-identical) and the continuity headline.
+
 ## Risks / open questions
 
 - **~~`main`-linear vs real DAG~~ — DECIDED:** tag-as-truth DAG; retire `--ff-only`-linear `main`. See Version model.
@@ -249,3 +305,4 @@ Two properties, two mechanisms:
 - 2026-08-31 (pass 5) — **Architecture correction + evolution-UX model.** Caught that `ui3`/`api` are NOT in the tenant repo (`_COPY_DIRS`), so the evolution agent literally cannot edit them — Tier 2 splits into **2a per-tenant agent layer** (what evolution edits, what a switch swaps) and **2b shared platform** (`api`/`ui3`/`bin`/`deploy`, human-only). **Decision (b): keep the split**, don't make the platform per-tenant-evolvable now (extension path noted). This also makes switch-reload **moot today** (a switch swaps only Tier-2a, read per-turn). Approved the evolution-UX model: one zoomable DAG-capable tree canvas + node popover + conversation drawer, no sub-tabs/sidebar; evolution conversations = Tier-3 provenance keyed to their node, cross-version-preserved, not in the research session list. Build split: R17 owns R17 backend + its UI together; `fix/ui3-bugs` owns standalone UI bugs. P1 backend (archive.py + tag-on-merge + `/versions`) built and self-verified (container smoke 13/13); awaiting the user's live evolution test.
 - 2026-08-30 (pass 4) — First-principles refinements: (a) **a skill is the smallest-granularity, purely-additive, instruction-only evolution** — same *act* as an evolution (modifying Tier-2 harness), differing only in blast radius, so gate ceremony should scale with blast radius; propose_skill and evolution being separate mechanisms is an implementation convenience, not a principled split (possible future unification). (b) A skill travels with the version because *a version is a coherent, reproducible whole*; genuinely-cross-version task knowledge belongs in **memory (R2)**, not skills — keep the two mechanisms pure. (c) Reload: reload-need is *computed* from the switch diff (not a stored meta field or a frozen layer taxonomy) — this part is settled; but **how** to reload an expensive-to-restart long-lived process (in-place vs blue-green temp-worktree vs multi-version routing) is left **OPEN** for a dedicated discussion with concrete cases (see Risks). (d) `fix/ui3-bugs`: duplicate-human-bubble fixed (`dedupeHumanEcho`, verified typecheck+build+6/6 assertions) + R12 longjob HITL renderer committed.
 - 2026-08-30 (pass 3) — **Corrected skills to Tier 2 (harness), not Tier 3.** The pass-2 "instruction-only ⇒ data" reasoning was wrong: a prompt is also instruction-only yet is harness. The real axis is *authored capability vs accumulated knowledge* — a skill is a modular special prompt, so version-bound like prompts/roles. Reframes the skill bug from "wrong location" to "authored-but-never-committed → a checkout clobbers it"; fix = authoring commits into the version + seed base skills at bootstrap.
+- 2026-09-01 (pass 8) — **Lineage tidy-tree + switch-boundary stress + design-questions recorded.** (a) **Lineage layout rewritten** from a git-lane layout (which tangled near-vertical branches) to a **Reingold–Tilford tidy tree**: root at top, generations flow down by longest-path depth, children fan out symmetrically and centre under their parent; node labels moved from beside-the-node to centred-under-the-node (full text stays in the hover popover); DAG merges hang under their first parent with the extra edge drawn as a cross-link. `tsc --noEmit` clean; all interaction (zoom/pan/popover/pin/collapse) preserved. See `ui3/src/components/EvolutionGraph.tsx` `layout()`. (b) **Version-switch stress test** on a fresh branching tenant (`root→ALPHA→BETA`, `root→GAMMA`) — all 9 boundaries pass (Verification § Switch-boundary stress); notable finding: a live research turn does **not** dirty the tracked tree, so the dirty-tree-blocks-switch boundary is unreachable by normal data flow (only an evolution leaving uncommitted tracked changes can hit it, and it returns a clean 409 rather than a half-swap). (c) **Evolution-conversation model recorded as open questions** (DQ1 session↔node↔edge coupling; DQ2 node status vs style; DQ3 zombie handling; DQ4 multi-turn = R18) for PR discussion — **none implemented in R17**. (d) Per user: **keep the current in-flight "zombie" style** for now (don't clean up, don't grey) — the future conversation-session model may couple session↔node differently, so don't pre-commit a node-status model. (e) DQ1 Option A (1:1:1 session=edge=node) is the working recommendation; zero data-model change.
