@@ -4,6 +4,7 @@ import type {
   Ev,
   CommitDetail,
   GitHistory,
+  VersionList,
   HitlDecision,
   HitlPending,
   HypSession,
@@ -35,6 +36,7 @@ export interface Api {
     onError?: (e: unknown) => void,
   ): StreamHandle;
   createSession(task: string): Promise<{ session_id: string; task: string }>;
+  forkSession(sid: string): Promise<{ session_id: string; parent: string }>;
   sendMessage(sid: string, text: string): Promise<SendResult>;
   interject(sid: string, text: string): Promise<{ ok: boolean; queued: boolean }>;
   stop(sid: string): Promise<{ ok: boolean }>;
@@ -68,6 +70,8 @@ export interface Api {
   gitHistory(limit?: number): Promise<GitHistory>;
   getCommit(sha: string): Promise<CommitDetail>;
   spawnEvolution(command: string, base?: string): Promise<{ session_id: string; command: string }>;
+  versions(): Promise<VersionList>;
+  activateVersion(id: string): Promise<VersionList>;
   // ---- hypothesis engine (parallel-set flow) ----
   startHypothesis(goal: string, n?: number): Promise<HypSession>;
   refineHypothesis(hid: string, parentId: string, feedback?: string, n?: number): Promise<HypSession>;
@@ -196,6 +200,33 @@ function mapPending(r: Raw): HitlPending {
         meta: overwrite ? "overwrites an existing skill" : undefined,
       };
     }
+    case "longjob_submit": {
+      // R12 long-job dispatch. Show the command as a code block (not escaped
+      // JSON) and the resources/image on the meta line.
+      const spec = p?.spec && typeof p.spec === "object" && !Array.isArray(p.spec)
+        ? (p.spec as Record<string, unknown>)
+        : {};
+      const n = (k: string): number | undefined => (typeof spec[k] === "number" ? (spec[k] as number) : undefined);
+      const backend = typeof spec.backend === "string" ? (spec.backend as string) : undefined;
+      const image = typeof spec.image === "string" ? (spec.image as string) : undefined;
+      const cmd = str("command") || (typeof spec.command === "string" ? (spec.command as string) : undefined);
+      const resources = [
+        backend ? `backend ${backend}` : null,
+        n("cpu") != null ? `${n("cpu")} cpu` : null,
+        n("gpu") ? `${n("gpu")} gpu` : null,
+        n("walltime_min") != null ? `${n("walltime_min")}m walltime` : null,
+        n("mem_mb") != null ? `${n("mem_mb")} MB` : null,
+      ].filter(Boolean).join(" · ");
+      return {
+        ...base,
+        action: backend
+          ? `The agent wants to run a background job on the ${backend} backend. Review the command below, then Approve to dispatch or Reject to stop it.`
+          : "The agent wants to run a background job. Review the command below, then Approve or Reject.",
+        detail: cmd ? "```bash\n" + cmd + "\n```" : undefined,
+        detailMarkdown: true,
+        meta: [str("job_id"), image, resources].filter(Boolean).join(" · ") || undefined,
+      };
+    }
   }
 
   // Fallback: string payloads pass through; unknown object payloads still show
@@ -312,6 +343,9 @@ export function createApi(cfg: ApiConfig): Api {
         method: "POST",
         body: JSON.stringify({ task }),
       }),
+
+    forkSession: (sid) =>
+      req<{ session_id: string; parent: string }>(`/sessions/${sid}/fork`, { method: "POST" }),
 
     async sendMessage(sid, text): Promise<SendResult> {
       const token = cfg.getToken();
@@ -451,6 +485,10 @@ export function createApi(cfg: ApiConfig): Api {
     gitHistory: async (limit = 200) => mapGit(await req<Raw>(`/git/history?limit=${limit}`)),
 
     getCommit: (sha) => req<CommitDetail>(`/git/commit/${encodeURIComponent(sha)}`),
+
+    versions: () => req<VersionList>("/versions"),
+    activateVersion: (id) =>
+      req<VersionList>(`/versions/${encodeURIComponent(id)}/activate`, { method: "POST" }),
 
     spawnEvolution: (command, base) =>
       req<{ session_id: string; command: string }>("/evolution/commands", {

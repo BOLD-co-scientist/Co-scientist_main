@@ -1,4 +1,6 @@
 import { Fragment, type ReactNode } from "react";
+import katex from "katex";
+import "katex/dist/katex.min.css";
 
 // A deliberately small Markdown renderer. ui3 has no markdown dependency and we
 // don't want one — agent output (final reports, checkpoint summaries) is
@@ -8,6 +10,32 @@ import { Fragment, type ReactNode } from "react";
 // ordered/unordered lists, blockquotes, tables, and horizontal rules. It is not
 // a spec-complete parser; when in doubt it degrades to plain text rather than
 // mangling. Theme-aware via the CSS vars in index.css.
+//
+// LaTeX math IS a dependency (KaTeX) — the one exception, because agents emit
+// `$…$` / `$$…$$` freely (R13 makes LaTeX the default output format) and hand-
+// rolling `\hat`, sub/superscripts, `\exp`, fractions is not viable. KaTeX is
+// rendered with throwOnError:false so malformed math degrades to its source
+// text (in the KaTeX error colour) rather than breaking the bubble.
+
+// Render a TeX string to a KaTeX node. Never throws — bad input renders as the
+// raw source, so a stray `$` can't blank out an agent's whole report.
+function mathNode(tex: string, display: boolean, key: string): ReactNode {
+  let html: string;
+  try {
+    html = katex.renderToString(tex, { displayMode: display, throwOnError: false });
+  } catch {
+    return (
+      <code key={key} style={{ fontFamily: "var(--mono)", fontSize: "0.88em" }}>
+        {tex}
+      </code>
+    );
+  }
+  return display ? (
+    <div key={key} style={{ margin: "8px 0", overflowX: "auto" }} dangerouslySetInnerHTML={{ __html: html }} />
+  ) : (
+    <span key={key} dangerouslySetInnerHTML={{ __html: html }} />
+  );
+}
 
 // ---- inline ----
 
@@ -15,10 +43,14 @@ import { Fragment, type ReactNode } from "react";
 // React nodes. Order matters: code first so `**` inside backticks stays literal.
 function inline(text: string, keyPrefix: string): ReactNode[] {
   const out: ReactNode[] = [];
-  // One regex, alternation ordered by precedence. Groups:
-  //  1 code  2 bold  3 italic  4 link-text  5 link-href
+  // One regex, alternation ordered by precedence. Math sits right after code so
+  // `$…$` content is protected from the bold/italic rules (e.g. the underscores
+  // in `$\log A_0$` must not be eaten as italic). Groups:
+  //  1 code  2 math  3 bold  4 italic  5 link-text  6 link-href
+  // Inline math requires a non-space just inside each `$` so prose like
+  // "it cost $5" is not mistaken for math.
   const re =
-    /(`[^`]+`)|(\*\*[^*]+\*\*)|(\*[^*]+\*|_[^_]+_)|\[([^\]]+)\]\(([^)]+)\)/g;
+    /(`[^`]+`)|(\$(?!\s)[^$\n]*?(?<!\s)\$)|(\*\*[^*]+\*\*)|(\*[^*]+\*|_[^_]+_)|\[([^\]]+)\]\(([^)]+)\)/g;
   let last = 0;
   let m: RegExpExecArray | null;
   let i = 0;
@@ -42,25 +74,27 @@ function inline(text: string, keyPrefix: string): ReactNode[] {
         </code>,
       );
     } else if (m[2]) {
-      out.push(
-        <strong key={key} style={{ color: "var(--hi)", fontWeight: 700 }}>
-          {inline(m[2].slice(2, -2), key)}
-        </strong>,
-      );
+      out.push(mathNode(m[2].slice(1, -1), false, key));
     } else if (m[3]) {
       out.push(
-        <em key={key}>{inline(m[3].slice(1, -1), key)}</em>,
+        <strong key={key} style={{ color: "var(--hi)", fontWeight: 700 }}>
+          {inline(m[3].slice(2, -2), key)}
+        </strong>,
       );
-    } else if (m[4] && m[5]) {
+    } else if (m[4]) {
+      out.push(
+        <em key={key}>{inline(m[4].slice(1, -1), key)}</em>,
+      );
+    } else if (m[5] && m[6]) {
       out.push(
         <a
           key={key}
-          href={m[5]}
+          href={m[6]}
           target="_blank"
           rel="noreferrer"
           style={{ color: "var(--accent)", textDecoration: "underline" }}
         >
-          {m[4]}
+          {m[5]}
         </a>,
       );
     }
@@ -122,6 +156,29 @@ export default function Markdown({ text, style }: { text: string; style?: React.
           {buf.join("\n")}
         </pre>,
       );
+      continue;
+    }
+
+    // display math ($$…$$) — a block, on one line or fenced across lines
+    if (/^\s*\$\$/.test(line)) {
+      const trimmed = line.trim();
+      const oneLine = /^\$\$([\s\S]+?)\$\$$/.exec(trimmed);
+      if (oneLine) {
+        blocks.push(mathNode(oneLine[1].trim(), true, `b${k++}`));
+        i++;
+        continue;
+      }
+      const buf: string[] = [];
+      const afterOpen = trimmed.replace(/^\$\$/, "");
+      if (afterOpen) buf.push(afterOpen);
+      i++;
+      while (i < lines.length && !lines[i].includes("$$")) buf.push(lines[i++]);
+      if (i < lines.length) {
+        const beforeClose = lines[i].replace(/\$\$.*$/, "");
+        if (beforeClose.trim()) buf.push(beforeClose);
+        i++; // consume the closing line
+      }
+      blocks.push(mathNode(buf.join("\n").trim(), true, `b${k++}`));
       continue;
     }
 
@@ -246,7 +303,7 @@ export default function Markdown({ text, style }: { text: string; style?: React.
     while (
       i < lines.length &&
       lines[i].trim() &&
-      !/^\s*(#{1,6}\s|```|>|\s*([-*+]|\d+\.)\s|(---|\*\*\*|___)\s*$)/.test(lines[i]) &&
+      !/^\s*(#{1,6}\s|```|\$\$|>|\s*([-*+]|\d+\.)\s|(---|\*\*\*|___)\s*$)/.test(lines[i]) &&
       !(lines[i].includes("|") && i + 1 < lines.length && isDivider(lines[i + 1]))
     ) {
       buf.push(lines[i]);

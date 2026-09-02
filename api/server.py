@@ -18,7 +18,7 @@ import uuid
 import yaml
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
-from scaffold import sandbox, settings
+from scaffold import archive, contract, sandbox, settings
 from scaffold._atomic import append_jsonl, read_json, write_json
 
 from . import schemas
@@ -213,6 +213,32 @@ def _clear_research_active(ctx: UserContext, sid: str) -> None:
     (_research_active_dir(ctx) / sid).unlink(missing_ok=True)
 
 
+# ---- version-switch guard (R17) --------------------------------------------
+# Switching the active version is a git checkout of the tenant's agent-layer code
+# that per-turn subprocesses read. Two guarantees (see docs/plans/R17): (1) never
+# swap code while a turn runs — refuse if the tenant is busy; (2) block NEW spawns
+# for the duration of the checkout — a `switch_lock` marker the spawn paths honour,
+# so a turn can't start mid-checkout and read a half-updated tree. Long jobs (R12)
+# are async/independent and are deliberately NOT waited on.
+def _switch_lock_path(ctx: UserContext) -> Path:
+    return ctx.state / "control" / "switch_lock"
+
+
+def _is_switch_locked(ctx: UserContext) -> bool:
+    return _switch_lock_path(ctx).exists()
+
+
+def _tenant_busy(ctx: UserContext) -> bool:
+    """True if any research/evolution runtime subprocess is live for this tenant."""
+    uid = ctx.user.user_id
+    return any(key[0] == uid for key in _RUNNING)
+
+
+def _guard_not_switching(ctx: UserContext) -> None:
+    if _is_switch_locked(ctx):
+        raise HTTPException(409, "a version switch is in progress — retry in a moment")
+
+
 async def _monitor_runtime(
     ctx: UserContext, sid: str, proc: "asyncio.subprocess.Process", log_fh
 ) -> None:
@@ -356,6 +382,7 @@ def clear_agent_key(ctx: UserContext = Depends(_ctx)):
 
 @app.post("/research/sessions", response_model=schemas.StartResearchResponse)
 async def start_research(req: schemas.StartResearchRequest, ctx: UserContext = Depends(_ctx)):
+    _guard_not_switching(ctx)
     sid = _safe_sid(req.session_id or _new_session_id())
     _ensure_session_dirs(ctx, sid)
     if req.autonomous:
@@ -379,6 +406,27 @@ async def stop_session(sid: str, ctx: UserContext = Depends(_ctx)):
     return {"ok": True}
 
 
+@app.post("/sessions/{sid}/fork")
+def fork_session(sid: str, ctx: UserContext = Depends(_ctx)):
+    """R17: branch a session into a new one continuable on the CURRENT active
+    version. Copies the session dir and drops the schema stamp (re-stamped on the
+    next turn at the current version), so a read-only session — one created by a
+    newer version than the one now active — can be continued after a fork. The
+    original is left untouched (the read-only guard keeps it safe)."""
+    sid = _safe_sid(sid)
+    if not _session_exists(ctx, sid):
+        raise HTTPException(404, "unknown session")
+    new_sid = _safe_sid(_new_session_id())
+    src = ctx.session_dir(sid)
+    dst = ctx.session_dir(new_sid)
+    if dst.exists():
+        raise HTTPException(409, "fork target already exists")
+    shutil.copytree(src, dst)
+    (dst / "schema.json").unlink(missing_ok=True)
+    _append_event(ctx, new_sid, actor="system", kind="session.forked", parent=sid)
+    return {"session_id": new_sid, "parent": sid}
+
+
 @app.post("/research/sessions/{sid}/messages")
 async def post_human_directive(
     sid: str, body: schemas.HumanDirective, ctx: UserContext = Depends(_ctx)
@@ -390,6 +438,7 @@ async def post_human_directive(
     session is unknown; 409 if a turn is still running (Stop it or wait) or there
     is no resumable prior turn yet."""
     sid = _safe_sid(sid)
+    _guard_not_switching(ctx)
     if not _session_exists(ctx, sid):
         raise HTTPException(404, "unknown session")
     if _monitor_key(ctx, sid) in _RUNNING:
@@ -455,6 +504,11 @@ def list_sessions(ctx: UserContext = Depends(_ctx)):
                     last_ts = rec.get("ts")
             except Exception:
                 last_kind = "unreadable"
+        # R17: a session stamped by a newer schema than this version can read is
+        # read-only here (the runtime guard opens it read-only). Surface it so the
+        # UI can show a banner + offer fork-to-continue.
+        _schema = read_json(sd / "schema.json", default=None)
+        readonly = isinstance(_schema, dict) and int(_schema.get("schema_version", 1)) > contract.SCHEMA_VERSION
         out.append(
             schemas.SessionSummary(
                 session_id=sd.name,
@@ -463,6 +517,7 @@ def list_sessions(ctx: UserContext = Depends(_ctx)):
                 last_ts=last_ts,
                 last_kind=last_kind,
                 running=_monitor_key(ctx, sd.name) in _RUNNING,
+                readonly=readonly,
             )
         )
     return out
@@ -917,6 +972,44 @@ def git_history(limit: int = 200, ctx: UserContext = Depends(_ctx)):
         raise HTTPException(500, f"git history failed: {e}")
 
 
+@app.get("/versions")
+def list_versions(ctx: UserContext = Depends(_ctx)):
+    """R17: the tenant's evolution version DAG — every ``ver/<id>`` node (a
+    merged evolution, made switchable) joined with its archive metadata
+    (summary, rationale, owner, smoke, status), plus which node is currently
+    active (== HEAD). Read-only, tenant-scoped; safe on every UI refresh."""
+    return archive.list_versions(ctx.root)
+
+
+@app.post("/versions/{version_id}/activate")
+def activate_version(version_id: str, ctx: UserContext = Depends(_ctx)):
+    """R17: switch this tenant's active version — check out ``ver/<version_id>``
+    (or a bare commit sha, e.g. the bootstrap root) into the working tree.
+
+    Idle-guarded: refuses (409) if any research/evolution turn is running, and
+    holds a ``switch_lock`` for the duration so no new turn can spawn mid-checkout
+    and read a half-swapped tree. Long jobs (R12) are async/independent and are
+    NOT waited on. Returns the refreshed version DAG (with the new active node)."""
+    if not re.fullmatch(r"[0-9A-Za-z._][0-9A-Za-z._-]{0,119}", version_id or ""):
+        raise HTTPException(400, f"invalid version id: {version_id!r}")
+    # (1) block new spawns FIRST, then (2) verify nothing is in flight, then swap.
+    lock = _switch_lock_path(ctx)
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.write_text(version_id, encoding="utf-8")
+    try:
+        if _tenant_busy(ctx):
+            raise HTTPException(
+                409, "stop the running research/evolution turn before switching versions"
+            )
+        try:
+            archive.activate_version(ctx.root, version_id)
+        except archive.ArchiveError as e:
+            raise HTTPException(409, str(e))
+    finally:
+        lock.unlink(missing_ok=True)
+    return archive.list_versions(ctx.root)
+
+
 @app.get("/git/commit/{sha}")
 def git_commit(sha: str, ctx: UserContext = Depends(_ctx)):
     """What's *in* a commit of the researcher's own harness repo — metadata plus
@@ -957,6 +1050,7 @@ async def start_evolution(req: schemas.StartEvolutionRequest, ctx: UserContext =
     HEAD if omitted), attempts the change described by ``req.command``, and
     proposes a merge for human approval. Its ``evolution.*`` lifecycle streams
     into the returned session and the merge lands in the lineage graph."""
+    _guard_not_switching(ctx)
     command = (req.command or "").strip()
     if not command:
         raise HTTPException(400, "command must not be empty")

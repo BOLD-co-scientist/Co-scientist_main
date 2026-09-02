@@ -24,6 +24,8 @@ export interface SessionSummary {
   session_id: string;
   task: string;
   running: boolean;
+  /** R17: created by a newer schema than the active version can read → opens read-only. */
+  readonly?: boolean;
   /** Present when the agent is waiting on a HITL decision. */
   blocked?: boolean;
   status?: SessionStatus;
@@ -119,6 +121,28 @@ export interface GitCommit {
 export interface GitHistory {
   head: string;
   commits: GitCommit[];
+}
+
+// R17: a switchable version node (a merged evolution, tagged ver/<id>).
+export interface Version {
+  id: string;
+  tag: string;
+  sha: string;
+  base_sha?: string;
+  summary?: string;
+  rationale?: string;
+  owner?: string;
+  status?: string; // merged | rejected | superseded | ...
+  origin_session?: string | null; // R17: the evolution session that produced this version (its birth story)
+  smoke?: { ran: boolean; ok?: boolean };
+  created_at?: number;
+  archive_dir?: string;
+  active?: boolean;
+}
+export interface VersionList {
+  versions: Version[];
+  active: string | null; // id of the active version, or null (detached / root)
+  head?: string;
 }
 
 // What's *in* a commit — for the clickable evolution-graph node detail.

@@ -221,6 +221,14 @@ export function createMockApi(): Api {
       return delay({ session_id: id, task });
     },
 
+    forkSession: (sid) => {
+      const id = "s_" + rid().slice(0, 4);
+      const src = find(sid);
+      sessions.unshift({ session_id: id, task: src?.task ?? "(fork)", running: false, blocked: false, last_kind: "session.forked" });
+      events[id] = [...(events[sid] ?? [])];
+      return delay({ session_id: id, parent: sid });
+    },
+
     sendMessage: async (sid, text) => {
       const s = find(sid);
       if (!s) return { ok: false, status: 404, error: "Session not found." };
@@ -319,6 +327,8 @@ export function createMockApi(): Api {
         ],
       }),
     spawnEvolution: (command) => delay({ session_id: "evo-mock-1", command }),
+    versions: () => delay({ versions: [], active: null }),
+    activateVersion: (_id) => delay({ versions: [], active: null }),
 
     // ---- hypothesis engine (mock: canned parallel sets, deterministic) ----
     startHypothesis: (goal, n = 4) => {

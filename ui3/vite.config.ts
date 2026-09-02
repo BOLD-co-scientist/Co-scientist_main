@@ -19,6 +19,7 @@ const API_PREFIXES = [
   "/roles",
   "/memory",
   "/git",
+  "/versions",
   "/health",
   "/evolution",
   "/hypothesis",

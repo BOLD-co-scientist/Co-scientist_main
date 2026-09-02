@@ -24,6 +24,7 @@ import type {
   RoleSummary,
   SessionFile,
   SessionSummary,
+  VersionList,
 } from "../lib/types";
 
 const TOKEN_KEY = "csk_token";
@@ -57,6 +58,7 @@ interface AppCtx {
   status: StatusView | null;
   select: (sid: string) => void;
   createSession: (task: string) => void;
+  forkSession: (sid: string) => Promise<void>;
   refreshSessions: () => Promise<void>;
   draftNew: boolean;
   startNewSession: () => void;
@@ -86,7 +88,7 @@ interface AppCtx {
   evoRunning: boolean;
   evolutionCommand: string;
   setEvolutionCommand: (command: string) => void;
-  startEvolution: (command: string) => Promise<void>;
+  startEvolution: (command: string, base?: string) => Promise<void>;
   answerEvo: (requestId: string, decision: "approve" | "reject", note?: string) => Promise<void>;
 
   // ---- R16: reflection for the active research session. `reflection` seeds the
@@ -113,6 +115,11 @@ interface AppCtx {
 
   git: GitHistory | null;
   loadGit: () => void;
+
+  // ---- R17 version DAG + switching ----
+  versions: VersionList | null;
+  loadVersions: () => void;
+  activateVersion: (id: string) => Promise<VersionList>;
 
   // ---- hypothesis session (persists across page switches + reload) ----
   hyp: HypSession | null;
@@ -183,6 +190,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [roles, setRoles] = useState<RoleSummary[]>([]);
   const [memory, setMemory] = useState<MemoryHit[]>([]);
   const [git, setGit] = useState<GitHistory | null>(null);
+  const [versions, setVersions] = useState<VersionList | null>(null);
   const [hyp, setHypState] = useState<HypSession | null>(null);
 
   // Lives in the store (not the view) so the open hypothesis session survives
@@ -522,6 +530,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     [api, refreshSessions, select, withHyp],
   );
 
+  // R17: fork a read-only session (created by a newer version) into a fresh one
+  // continuable on the active version. The copy drops the schema stamp so the
+  // next turn re-stamps it; the original is left untouched.
+  const forkSession = useCallback(
+    async (sid: string) => {
+      try {
+        const { session_id } = await api.forkSession(sid);
+        await refreshSessions();
+        select(session_id);
+      } catch {
+        /* ignore */
+      }
+    },
+    [api, refreshSessions, select],
+  );
+
   // "New session" opens an empty compose view (no backend session yet); the
   // first message the user sends creates the real session.
   const startNewSession = useCallback(() => {
@@ -638,11 +662,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   // ---- evolution actions ----
   const startEvolution = useCallback(
-    async (command: string) => {
+    // `base` (R17): branch the evolution from a specific node instead of the
+    // active tip. Either way the new evo-* session is adopted as the drawer's
+    // channel — it is NEVER routed into the research session rail.
+    async (command: string, base?: string) => {
       const cmd = command.trim();
       if (!cmd) return;
       try {
-        const { session_id } = await api.spawnEvolution(cmd);
+        const { session_id } = await api.spawnEvolution(cmd, base);
         localStorage.setItem(EVO_KEY, session_id);
         setEvoEvents([]);
         setEvoPending([]);
@@ -773,6 +800,27 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   }, [api]);
 
+  const loadVersions = useCallback(async () => {
+    try {
+      setVersions(await api.versions());
+    } catch {
+      /* ignore */
+    }
+  }, [api]);
+
+  // Switch the active version, then refresh the DAG + versions so the graph and
+  // the active marker update. Throws on 409 (busy / switch in progress) so the
+  // caller can surface it.
+  const activateVersion = useCallback(
+    async (id: string) => {
+      const vl = await api.activateVersion(id);
+      setVersions(vl);
+      void loadGit();
+      return vl;
+    },
+    [api, loadGit],
+  );
+
   // when a session becomes blocked, pull focus to the approvals tab
   useEffect(() => {
     if (active?.blocked) setRightTab("hitl");
@@ -812,6 +860,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     status,
     select,
     createSession,
+    forkSession,
     refreshSessions,
     draftNew,
     startNewSession,
@@ -854,6 +903,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     searchMemory,
     git,
     loadGit,
+    versions,
+    loadVersions,
+    activateVersion,
     hyp,
     setHyp,
     workingHyp,

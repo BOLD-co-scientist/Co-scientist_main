@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useApp } from "../state/store";
 import type { Ev } from "../lib/types";
-import { cleanTool, isSystemNoise, toVM, type ToolResult } from "../lib/eventVM";
+import { cleanTool, dedupeHumanEcho, isSystemNoise, toVM, type ToolResult } from "../lib/eventVM";
 import EventItem from "./EventItem";
 import ToolGroup from "./ToolGroup";
 import Composer from "./Composer";
@@ -87,7 +87,11 @@ export default function EventStream() {
     const visible = (showSystem ? events : events.filter((e) => !isSystemNoise(e))).filter(
       (e) => e.kind !== "tool.result",
     );
-    return buildUnits(visible);
+    // Follow-up human messages are logged twice (message.received + an identical
+    // human_directive echo); collapse the echo so a message shows once. Kept raw
+    // in system view (⌘/Ctrl-O). See dedupeHumanEcho.
+    const deduped = showSystem ? visible : dedupeHumanEcho(visible);
+    return buildUnits(deduped);
   }, [events, showSystem]);
 
   useEffect(() => {
@@ -165,6 +169,18 @@ export default function EventStream() {
           </button>
         )}
       </div>
+
+      {/* R17: read-only indicator (display-only for now). A session created by a
+          newer version than the one now active opens read-only. The recovery UX
+          (fork, or something else) is deliberately deferred until we actually hit
+          this case and can design it from experience — see the R17 doc. */}
+      {active.readonly && (
+        <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 24px", background: "var(--warn-soft, var(--bg2))", borderBottom: "1px solid var(--border)" }}>
+          <span style={{ flex: 1, fontSize: 12.5, color: "var(--mid)", lineHeight: 1.4 }}>
+            <b style={{ color: "var(--hi)", fontWeight: 600 }}>Read-only.</b> This session was created by a newer version than the one now active, so it can't run here. Switch to a version that can read it, or start a new session.
+          </span>
+        </div>
+      )}
 
       {/* pinned HITL banner */}
       {hasPending && (
