@@ -81,10 +81,16 @@ def commit_all(wt: Worktree, message: str) -> str | None:
     return _git("rev-parse", "HEAD", cwd=wt.path).strip()
 
 
+def branch_tip(wt: Worktree) -> str:
+    """The worktree branch's current commit (its tip)."""
+    return _git("rev-parse", "HEAD", cwd=wt.path).strip()
+
+
 def merge_to_main(wt: Worktree) -> str:
-    """Fast-forward main to the worktree's HEAD."""
-    head = _git("rev-parse", "HEAD", cwd=wt.path).strip()
-    # Apply via a non-FF-but-safe merge: we cherry-pick from the branch.
+    """Fast-forward the active tree (HEAD) to the worktree's tip. Raises
+    ``GitError`` when HEAD has moved since the branch was cut (a sibling already
+    merged) — callers may then record the tip as a *sibling* version instead."""
+    head = branch_tip(wt)
     _git("merge", "--ff-only", wt.branch)
     return head
 

@@ -78,6 +78,7 @@ def record_merged_version(
     owner: str,
     smoke: dict[str, Any] | None = None,
     origin_session: str | None = None,
+    extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Promote a just-merged evolution to a first-class version node.
 
@@ -117,6 +118,10 @@ def record_merged_version(
         "archive_dir": archive_dir.name,
         "diff": "diff.patch",
     }
+    # Additive, optional metadata (R19: ``sibling`` for a child recorded beside
+    # an already-merged sibling, ``proposal_id`` for planner provenance).
+    for k, v in (extra or {}).items():
+        node.setdefault(k, v)
     write_json(archive_dir / "meta.json", node)
     _append_to_index(repo, node)
     return node

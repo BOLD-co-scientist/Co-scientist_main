@@ -58,6 +58,11 @@ class HumanDirective(BaseModel):
 class StartEvolutionRequest(BaseModel):
     command: str
     session_id: str | None = None
+    # R19: the planner proposal this command implements (links the evolution
+    # session and the resulting version back to the proposal node), and whether
+    # it edits the tenant harness or the shared platform (ui3/ + api/).
+    proposal_id: str | None = None
+    scope: str = "harness"  # "harness" | "platform"
     # Commit sha the human picked in the evolution graph to branch from; HEAD if omitted.
     base: str | None = None
 
@@ -283,3 +288,46 @@ class GitCommit(BaseModel):
 class GitHistory(BaseModel):
     commits: list[GitCommit]
     head: str | None = None
+
+
+# ---- R19: guided evolution search (goal ledger, planner, judge, modes) ----
+
+
+class EvoModeUpdate(BaseModel):
+    mode: str  # "manual" | "automatic"
+
+
+class GoalSubgoalIn(BaseModel):
+    id: str | None = None
+    text: str
+    acceptance: list[str] = []
+    capabilities_needed: list[str] = []
+    status: str | None = None  # pending | current | done | skipped
+
+
+class GoalsPatch(BaseModel):
+    approach_hints: str | None = None
+    subgoals: list[GoalSubgoalIn] | None = None
+    order: list[str] | None = None
+    current: str | None = None
+
+
+class GoalsDeriveRequest(BaseModel):
+    approach_hints: str | None = None
+    keep_subgoals: bool | None = None
+
+
+class DriftAnswer(BaseModel):
+    changed: bool
+    note: str | None = None
+
+
+class PlanRequest(BaseModel):
+    brief_id: str
+    trigger: str = "manual"
+
+
+class ProposalDecision(BaseModel):
+    decision: str  # "pick" | "both" | "decline"
+    note: str | None = None
+    with_id: str | None = None  # second proposal for "both" (explore two branches)

@@ -167,13 +167,28 @@ def make_server(session_id: str, wt: sandbox.Worktree):
                     "DEFERRED: research session(s) still running; merge NOT applied. "
                     "Stop them, then re-run this evolution. Your worktree is preserved."
                 )}], "isError": True}
-            head = sandbox.merge_to_main(wt)
+            sibling = False
+            try:
+                head = sandbox.merge_to_main(wt)
+            except sandbox.GitError as e:
+                # R19 "explore both": the parent already grew another child, so
+                # HEAD moved and this branch cannot fast-forward. Keep it as a
+                # SIBLING version node — tag its tip, leave HEAD where it is —
+                # instead of failing: the human compares both and activates one.
+                if "ff-only" not in str(e) and "fast-forward" not in str(e).lower():
+                    raise
+                head = sandbox.branch_tip(wt)
+                sibling = True
+                eventlog.append(
+                    session_id, actor="evolution", kind="evolution.note",
+                    note="HEAD has moved since this branch was cut (a sibling merged first); recording this change as a sibling version node instead of fast-forwarding.",
+                )
             # Compute revert.patch (reverse diff) for rollback.
             revert = subprocess.check_output(
                 ["git", "diff", head, wt.base], cwd=str(settings.ROOT), text=True
             )
             (archive_dir / "revert.patch").write_text(revert, encoding="utf-8")
-            write_json(archive_dir / "decision.json", {"status": "merged", "head": head})
+            write_json(archive_dir / "decision.json", {"status": "merged", "head": head, "sibling": sibling})
             # R17: promote the merged evolution to a first-class version node —
             # tag ver/<id> + archive manifest — so it becomes switchable. Never
             # fatal: the merge already landed; a manifest hiccup must not fail it.
@@ -182,14 +197,19 @@ def make_server(session_id: str, wt: sandbox.Worktree):
                     settings.ROOT, archive_dir=archive_dir, head_sha=head,
                     base_sha=wt.base, summary=summary, rationale=rationale,
                     owner=archive.owner_of(settings.ROOT), smoke=smoke_info,
-                    origin_session=session_id,
+                    origin_session=session_id, extra={"sibling": sibling},
                 )
                 eventlog.append(session_id, actor="evolution", kind="version.recorded",
                                 ref=str(archive_dir.name), version=node["id"], tag=node["tag"])
             except Exception as e:
                 eventlog.append(session_id, actor="evolution", kind="version.record_error", error=str(e))
             sandbox.remove_after_merge(wt)
-            eventlog.append(session_id, actor="evolution", kind="evolution.merged", ref=str(archive_dir.name))
+            eventlog.append(session_id, actor="evolution", kind="evolution.merged", ref=str(archive_dir.name), sibling=sibling)
+            if sibling:
+                return {"content": [{"type": "text", "text": (
+                    f"RECORDED as sibling version {archive_dir.name} (approved, tagged, NOT active: a sibling "
+                    "merged first). The human can activate it from the version tree."
+                )}]}
             return {"content": [{"type": "text", "text": f"MERGED as version {archive_dir.name}. Restart sessions to pick up changes."}]}
         else:
             decision_kind = decision.get("decision", "reject")

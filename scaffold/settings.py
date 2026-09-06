@@ -124,6 +124,27 @@ OUTPUT_FORMAT = os.environ.get("COSCIENTIST_OUTPUT_FORMAT", "latex").strip().low
 if OUTPUT_FORMAT not in ("latex", "markdown"):
     OUTPUT_FORMAT = "latex"
 
+# R19 guided evolution search (docs/plans/R19-guided-evolution-search.md).
+# The planner runs in the API process after a research turn completes cleanly;
+# it waits EVO_PLAN_DELAY_S first so the R16 reflection (a subprocess) has time
+# to land and can be used as evidence. 0 → immediately (tests).
+EVO_PLAN = os.environ.get("COSCIENTIST_EVO_PLAN", "1") not in ("0", "false", "False", "")
+EVO_PLAN_DELAY_S = int(os.environ.get("COSCIENTIST_EVO_PLAN_DELAY_S", "45"))
+# Gate-2 judge watcher: how often to look for a pending evolution_merge request
+# in a running evolution session, and how many times the judge may auto-reject
+# (send the agent back to revise) before leaving the gate to the human.
+JUDGE_MERGE_POLL_S = float(os.environ.get("COSCIENTIST_JUDGE_MERGE_POLL_S", "2"))
+JUDGE_MAX_AUTO_REJECTS = int(os.environ.get("COSCIENTIST_JUDGE_MAX_AUTO_REJECTS", "2"))
+# The git repo evolution worktrees branch from. Defaults to ROOT (the tenant's
+# own harness); a platform-scope evolution sets it to the shared platform
+# checkout so the agent can edit ui3/ and api/ (R19 answer 3), while ROOT still
+# points at the tenant for state/events.
+REPO = Path(os.environ.get("COSCIENTIST_REPO", str(ROOT)))
+PLATFORM_REPO = Path(os.environ.get("COSCIENTIST_PLATFORM_REPO", str(ROOT)))
+# Platform-scope evolutions (the agent may edit ui3/ + api/ with a fallback
+# copy and a tested cutover). Off until the staging gate + cutover are wired.
+PLATFORM_EVOLUTION = os.environ.get("COSCIENTIST_PLATFORM_EVOLUTION", "0") not in ("0", "false", "False", "")
+
 
 def ensure_runtime_dirs() -> None:
     """Create global runtime directories that exist outside any session."""
