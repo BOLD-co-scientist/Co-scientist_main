@@ -281,6 +281,12 @@ export default function EvolutionCanvas({ onEvolveFrom, onViewConversation }: {
                           {isActive(n.c) ? "ACTIVE" : "IN-FLIGHT"}
                         </span>
                       )}
+                      {/* O2: a version fetched from a colleague (adopt → a second root; merge/tool → a child) */}
+                      {ver?.imported_from && (
+                        <span style={badge("var(--lav)", "#0f0a1c")} title={`imported from ${ver.imported_from.owner_name ?? ver.imported_from.owner ?? "a colleague"} · ${ver.imported_from.version_id ?? ""}`}>
+                          {`⇩ ${ver.imported_from.owner_name ?? "IMPORTED"}`}
+                        </span>
+                      )}
                       <span style={{ maxWidth: "100%", fontSize: 12, textAlign: "center", color: on ? "var(--hi)" : isVer ? "var(--mid)" : "var(--lo)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
                     </div>
                   </foreignObject>
@@ -329,6 +335,20 @@ export default function EvolutionCanvas({ onEvolveFrom, onViewConversation }: {
         />
       )}
     </div>
+  );
+}
+
+// O2: make one of your own versions discoverable/importable by colleagues even
+// if none of your shared problems ran on it (additive `shared` on meta.json).
+function ShareToggle({ version }: { version: Version }) {
+  const { api, loadVersions } = useApp();
+  const [busy, setBusy] = useState(false);
+  const shared = !!version.shared;
+  return (
+    <label style={{ marginTop: 7, display: "flex", alignItems: "center", gap: 7, fontSize: 11, color: "var(--mid)", cursor: "pointer" }} title="Shared versions can be imported by colleagues from the Projects page. Versions linked to a shared, launched problem are importable regardless.">
+      <input type="checkbox" checked={shared} disabled={busy} onChange={async (e) => { setBusy(true); try { await api.shareVersion(version.id, e.target.checked); loadVersions(); } finally { setBusy(false); } }} />
+      {shared ? "shared with colleagues" : "share with colleagues"}
+    </label>
   );
 }
 
@@ -381,6 +401,7 @@ function NodePopover({
 
   const switchable = version != null || c.parents.length === 0;
   const kindLabel = active ? "Active — running now"
+    : version?.status === "imported" ? `Imported from ${version.imported_from?.owner_name ?? "a colleague"}`
     : version ? "Switchable version"
     : isEvo ? "In-flight evolution"
     : c.parents.length === 0 ? "Root (v0)"
@@ -422,6 +443,14 @@ function NodePopover({
       )}
       {version?.smoke?.ran && (
         <div style={{ marginTop: 6, fontSize: 10.5, color: version.smoke.ok ? "var(--ok)" : "var(--err)" }}>{version.smoke.ok ? "smoke ✓" : "smoke ✗"}</div>
+      )}
+      {version?.imported_from && (
+        <div style={{ marginTop: 6, fontSize: 11, color: "var(--lav)" }}>
+          ⇩ from {version.imported_from.owner_name ?? version.imported_from.owner} · {version.imported_from.version_id}{version.imported_from.from_node_title ? ` (evolved for “${version.imported_from.from_node_title}”)` : ""}{version.imported_from.tools?.length ? ` · tools: ${version.imported_from.tools.join(", ")}` : ""}
+        </div>
+      )}
+      {version && !version.imported_from && (
+        <ShareToggle version={version} />
       )}
 
       {/* Actions only on a switchable node (a version or the v0 root): both

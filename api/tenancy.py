@@ -139,11 +139,33 @@ def ensure_user_root(user_id: str) -> Path:
 
     _ensure_runtime_dirs(root)
     _ensure_git_repo(root)
+    _ensure_git_excludes(root)
     marker.write_text("This is a per-user coscientist harness root.\n", encoding="utf-8")
     return root
 
 
+def _ensure_git_excludes(root: Path) -> None:
+    """Repo-local excludes (never a tracked file) for the tenant marker and
+    runtime dirs, so a version switch / import checkout is never blocked by
+    "untracked working tree files would be overwritten". Idempotent; applies to
+    existing tenants on their next request (their .gitignore is a frozen copy)."""
+    info = root / ".git" / "info"
+    if not (root / ".git").is_dir():
+        return
+    try:
+        info.mkdir(parents=True, exist_ok=True)
+        exclude = info / "exclude"
+        cur = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
+        want = [".coscientist-user-root", "/state/", "/worktrees/", "/researcher_data/", ".claude/skills/"]
+        missing = [w for w in want if w not in cur.splitlines()]
+        if missing:
+            exclude.write_text(cur + ("" if cur.endswith("\n") or not cur else "\n") + "\n".join(missing) + "\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
 def _ensure_runtime_dirs(root: Path) -> None:
+    _ensure_git_excludes(root)
     for path in (
         root / "state" / "sessions",
         root / "state" / "library" / ".staging",

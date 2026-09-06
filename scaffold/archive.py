@@ -130,11 +130,81 @@ def _append_to_index(repo: Path, node: dict[str, Any]) -> None:
     # Replace an existing entry with the same id (re-merge), else append.
     versions = [v for v in versions if v.get("id") != node["id"]]
     versions.append(
-        {k: node[k] for k in ("id", "tag", "sha", "base_sha", "summary", "owner", "status", "origin_session", "created_at", "archive_dir")}
+        {k: node.get(k) for k in ("id", "tag", "sha", "base_sha", "summary", "owner", "status", "origin_session", "created_at", "archive_dir", "imported_from", "shared")}
     )
     idx["versions"] = versions
     idx["schema_version"] = SCHEMA_VERSION
     write_json(_index_path(repo), idx)
+
+
+def record_imported_version(
+    repo: Path,
+    *,
+    archive_dir: Path,
+    sha: str,
+    rollback_to: dict[str, Any],
+    summary: str,
+    rationale: str,
+    owner: str,
+    imported_from: dict[str, Any],
+    import_id: str,
+    smoke: dict[str, Any] | None = None,
+    origin_session: str | None = None,
+) -> dict[str, Any]:
+    """O2 (additive): promote a commit fetched from ANOTHER tenant's repo to a
+    first-class version node of this repo — the "adopt" harness import. Same
+    shape as ``record_merged_version`` plus provenance (``imported_from``), the
+    import ledger id and the node to switch back to (``rollback_to``). The
+    node's ``status`` is ``imported`` so the UI can label the second root."""
+    vid = version_id_from_archive(archive_dir.name)
+    tag = _TAG_PREFIX + vid
+    try:
+        _git("tag", "-f", "-a", tag, sha, "-m", summary or vid, repo=repo)
+    except subprocess.CalledProcessError:
+        pass
+    node = {
+        "id": vid,
+        "tag": tag,
+        "sha": sha,
+        "base_sha": rollback_to.get("sha") or "",
+        "summary": summary,
+        "rationale": rationale,
+        "owner": owner,
+        "schema_version": SCHEMA_VERSION,
+        "smoke": smoke or {"ran": False},
+        "status": "imported",
+        "origin_session": origin_session,
+        "created_at": time.time(),
+        "archive_dir": archive_dir.name,
+        "diff": "diff.patch",
+        "imported_from": imported_from,
+        "import_id": import_id,
+        "rollback_to": rollback_to,
+    }
+    write_json(archive_dir / "meta.json", node)
+    _append_to_index(repo, node)
+    return node
+
+
+def annotate_version(repo: Path, vid: str, **fields: Any) -> dict[str, Any] | None:
+    """O2 (additive): merge extra keys into a node's ``meta.json`` (e.g.
+    ``imported_from`` after a merge-mode import, or ``shared`` when the owner
+    makes a version discoverable to colleagues). Returns the updated meta."""
+    path = _archive_root(repo) / vid / "meta.json"
+    meta = read_json(path, default=None)
+    if not isinstance(meta, dict):
+        return None
+    meta.update(fields)
+    write_json(path, meta)
+    idx = read_json(_index_path(repo), default=None)
+    if isinstance(idx, dict):
+        for v in idx.get("versions") or []:
+            if v.get("id") == vid:
+                for k in ("imported_from", "shared"):
+                    if k in fields:
+                        v[k] = fields[k]
+        write_json(_index_path(repo), idx)
+    return meta
 
 
 def _current_sha(repo: Path) -> str | None:

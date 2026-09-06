@@ -42,6 +42,9 @@ export default function SessionRail() {
         <button onClick={() => setMainView("evolution")} style={navBtn(mainView === "evolution")}>
           <span style={{ width: 15, textAlign: "center", opacity: 0.85 }}>{"\u25C7"}</span> Evolution
         </button>
+        <button onClick={() => setMainView("projects")} title="The org-wide project tree: every shared problem and how they relate" style={navBtn(mainView === "projects")}>
+          <span style={{ width: 15, textAlign: "center", opacity: 0.85 }}>{"\u2B21"}</span> Projects
+        </button>
       </div>
 
       <div style={{ padding: "12px 18px 6px", fontSize: 10.5, fontWeight: 600, color: "var(--lo)", textTransform: "uppercase", letterSpacing: ".09em" }}>

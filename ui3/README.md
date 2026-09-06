@@ -75,31 +75,45 @@ src/
     TopBar, SessionRail, Workbench
     EventStream, EventItem, Composer      ← the signature timeline
     RightRail, HitlPanel, FilesPanel, ContextPanel
-    OnboardingView                        ← the onboarding phase (O1): brief → data → hypotheses → launch
+    OnboardingView                        ← the onboarding system (O1+O2): five-question statement → data → project tree & advisor → hypotheses → launch
+    AdvisorCards, NearTree                advisor recommendations + one-click HITL-gated imports; the near-tree around a problem
+    ProjectTreeView                       the org-wide project tree (Projects page)
     HypothesisView, HypothesisCards       parallel-set hypothesis explorer (cards shared with onboarding)
     EvolutionView, EvolutionGraph, ActivityLog      evolution: capability lineage + log
 ```
 
-## Onboarding phase (O1)
+## Onboarding system (O1 + O2)
 
-"New session" opens `OnboardingView`, a four-step wizard backed by
-`/onboarding/briefs/*` (see `docs/plans/O1-onboarding.md`):
+"New session" opens `OnboardingView`, a five-step wizard backed by
+`/onboarding/briefs/*` and `/projects/*` (plans: `docs/plans/O1-onboarding.md`,
+`docs/plans/O2-project-tree-advisor.md`). The steps adapt to what has been
+answered:
 
-1. **Define the problem** — the fixed brief format (title + research question
-   required; domain, background, objectives, constraints, success criteria,
-   deliverables). Autosaved as a server-side draft; drafts can be resumed.
-2. **Data** — upload files/folders to the library and *attach* them to the brief
-   with a one-line description each.
-3. **Hypothesis search** — the parallel-set generator seeded from the whole
-   brief; selecting a card makes it the session's working hypothesis (synced
-   server-side).
-4. **Review & launch** — the exact first-turn message the supervisor will
-   receive (`GET …/preview`), then `POST …/launch`.
+1. **Problem statement** — the five questions (definition · why it matters ·
+   prior work + open gap · objective evaluation · data/task/results/permissions)
+   with a completeness dot per question, keywords, and the "Share on the
+   project tree" toggle. Title + question unlock the later steps; questions
+   1–3 register the problem on the org tree when you continue (and start the
+   background advisor — the pill in the header tracks it on every step).
+2. **Data** — upload files/folders to the library, attach them with a
+   description, answer question 4. Every library file has a `get` download.
+3. **Project tree & advisor** — the near-tree (neighbours by relation, confirm /
+   reject / declare relations) and the advisor's cards: statement review
+   (gaps by question with jump links, suggested keywords), related problems,
+   the harness recommendation (Import & switch / Merge into mine → approval
+   card → active version / Switch back), tool imports (checkboxes, role wiring
+   → approval card), the evolution-agent fallback, served-by / cost / re-run.
+4. **Hypotheses** (optional) — the parallel-set search seeded from the whole
+   statement, with the advisor's hint.
+5. **Review & launch** — the exact opening message (now with the harness and
+   the project-tree context), gaps by question, and a warning when an import
+   approval is still pending.
 
-A brief-launched session shows a pinned bar (working hypothesis + "view
-brief") and a `session.brief` bubble at the top of its timeline. "Quick start
-instead" keeps the old free-form composer path. `npm run dev:mock` runs the
-whole flow against the in-memory mock.
+**Projects** in the left rail opens `ProjectTreeView`: every shared problem
+clustered by domain, owner-coloured, status-shaped; a node's statement,
+sessions/outcomes, harness and tools; "Start a subproblem here"; relation
+confirm/reject. Mock mode (`VITE_MOCK=1`) simulates the registry, a canned
+advisor run (~2 s) and the import approval flow.
 
 ## Hypotheses & Evolution
 

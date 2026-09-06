@@ -5,6 +5,7 @@ import RightRail from "./RightRail";
 import HypothesisView from "./HypothesisView";
 import EvolutionView from "./EvolutionView";
 import OnboardingView from "./OnboardingView";
+import ProjectTreeView from "./ProjectTreeView";
 import { useApp } from "../state/store";
 
 export default function Workbench() {
@@ -19,6 +20,7 @@ export default function Workbench() {
           {mainView === "onboarding" && <OnboardingView />}
           {mainView === "hypothesis" && <HypothesisView />}
           {mainView === "evolution" && <EvolutionView />}
+          {mainView === "projects" && <ProjectTreeView />}
         </div>
         {mainView === "session" && <RightRail />}
       </div>

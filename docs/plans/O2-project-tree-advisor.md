@@ -1,9 +1,9 @@
 # O2 — Onboarding system: five-question problem statement, project tree, background Fable advisor, harness/tool imports
 
-**Status:** Planned (design settled 2026-09-06; builds on O1, R16, R17)
+**Status:** 🟢 Built (2026-09-06) — backend + UI + offline suites; live verification recorded under Notes
 **Owner:** yuhe
-**Started:** —
-**Branch:** `feat/O2-project-tree` (off `feat/O1-onboarding`, which already carries the collaborator's R16/R17 work)
+**Started:** 2026-09-06
+**Branch:** `feat/O1-onboarding` (built directly on the O1 branch, which already carries the collaborator's R16/R17 work)
 **Done when:** a researcher can (1) state a problem in the fixed five-question
 format and upload its data, both retrievable at any time; (2) see their problem
 placed on an org-wide project tree next to adjacent problems, with the sessions,
@@ -266,42 +266,42 @@ a session exists (a slim card, like R16's nudge).
 ## Steps
 
 ### Phase 1 — Brief v2 + library download
-- [ ] 1. `api/onboarding.py`: new fields, `_upgrade()` on load (background→prior_work alias), fixed sections, `brief_goal` context; `api/schemas.py` widened; `missing_for_registration()`.
-- [ ] 2. `GET /library/files/download` (reuse the library path guards).
-- [ ] 3. Tests: fixed-order golden updated; O1-era record loads/renders/launches; download traversal/404/200.
-- [ ] 4. UI: five-question DefineStep with completeness dots, keywords, share toggle; FilesPanel library download.
+- [x] 1. `api/onboarding.py`: new fields, `_upgrade()` on load (background→prior_work alias), fixed sections, `brief_goal` context; `api/schemas.py` widened; `missing_for_registration()`.
+- [x] 2. `GET /library/files/download` (reuse the library path guards).
+- [x] 3. Tests: fixed-order golden updated; O1-era record loads/renders/launches; download traversal/404/200.
+- [x] 4. UI: five-question DefineStep with completeness dots, keywords, share toggle; FilesPanel library download.
 - Verify: `pytest tests/test_onboarding.py -q`; curl create → preview shows the new sections in order; an existing `brief.json` still renders; library download returns the bytes; `npm run build`.
 
 ### Phase 2 — Registry + tree
-- [ ] 5. `api/projects.py`: node/edge store (atomic writes), `register()`, `recompute_edges()` (BM25 + dataset/method edges), `link_session()`, `sync_session()`, visibility helpers, cache.
-- [ ] 6. Routes: register, tree, node, near, patch, edges confirm/reject, spawn-brief; launch links the session; `_monitor_runtime` syncs outcomes.
-- [ ] 7. `tests/test_projects.py`: two tenants; org vs private visibility; BM25 neighbour on overlapping statements; confirm/reject; spawn-brief sets parent; pre-R17 archive node tolerated.
-- [ ] 8. UI: `ProjectTreeView` (full tree; reuse the R17 canvas idioms), `NearTree` panel, Projects nav.
+- [x] 5. `api/projects.py`: node/edge store (atomic writes), `register()`, `recompute_edges()` (BM25 + dataset/method edges), `link_session()`, `sync_session()`, visibility helpers, cache.
+- [x] 6. Routes: register, tree, node, near, patch, edges confirm/reject, spawn-brief; launch links the session; `_monitor_runtime` syncs outcomes.
+- [x] 7. `tests/test_projects.py`: two tenants; org vs private visibility; BM25 neighbour on overlapping statements; confirm/reject; spawn-brief sets parent; pre-R17 archive node tolerated.
+- [x] 8. UI: `ProjectTreeView` (full tree; reuse the R17 canvas idioms), `NearTree` panel, Projects nav.
 - Verify: two users via curl; A registers, B sees A's node, not A's private draft; B's near-tree lists A with a weight; spawn-brief → draft with parent.
 
 ### Phase 3 — Advisor
-- [ ] 9. `api/llm.py` (Fable→Opus `complete()` + tolerant JSON), `api/hypothesis.py` refactored onto it.
-- [ ] 10. `api/prompts/advisor.md` (hard rules: JSON only, cite evidence, never recommend what exists, `harness_import: null` is valid, ≤5 tools, name gaps by question number).
-- [ ] 11. `api/advisor.py` runner: candidates, catalogue, budget, one call, validation, record + edges + events; `_spawn_advisor`; lock/stale handling; skip on empty tree.
-- [ ] 12. Routes advise / recommendations; `tests/test_advisor.py` with a fake client (refusal → Opus; unknown ids dropped; unchanged hash → no run; empty tree → no call).
-- [ ] 13. UI: `AdvisorCards` with polling, gaps, related, harness, tools, footer.
+- [x] 9. `api/llm.py` (Fable→Opus `complete()` + tolerant JSON), `api/hypothesis.py` refactored onto it.
+- [x] 10. `api/prompts/advisor.md` (hard rules: JSON only, cite evidence, never recommend what exists, `harness_import: null` is valid, ≤5 tools, name gaps by question number).
+- [x] 11. `api/advisor.py` runner: candidates, catalogue, budget, one call, validation, record + edges + events; `_spawn_advisor`; lock/stale handling; skip on empty tree.
+- [x] 12. Routes advise / recommendations; `tests/test_advisor.py` with a fake client (refusal → Opus; unknown ids dropped; unchanged hash → no run; empty tree → no call).
+- [x] 13. UI: `AdvisorCards` with polling, gaps, related, harness, tools, footer.
 - Verify (live, ≈$1): tenant A has a tagged version (seeded like the R17 stress test); B registers an adjacent statement → record `ready` within ~30 s, `served_by` recorded, harness points at A's version, tools exclude base tools; re-register unchanged → skipped.
 
 ### Phase 4 — Harness import
-- [ ] 14. `api/imports.py`: `fetch_ref()`, pre-gate smoke in a temp worktree, HITL request writer for `evo-import-*`, `apply_adopt()` (tag, meta, activate under lock), `apply_merge()` (worktree, 3-way, smoke, ff-merge, delegate on conflict), rollback target, ledger.
-- [ ] 15. `POST /hitl/{sid}/{rid}/answer` hook; `POST /projects/{pid}/imports`; `GET /projects/imports/{iid}`; `scaffold/archive.py` (platform copy) additive `record_imported_version` / `imported_from` passthrough; `HitlPanel` renderer for `harness_import`.
-- [ ] 16. `tests/test_imports.py`: two temp tenants; fetch; smoke; pending record shape; approve → tag + meta + detached HEAD, `state/` sha256 identical; reject prunes the ref; busy/lock 409; self-import 400; unknown 404.
+- [x] 14. `api/imports.py`: `fetch_ref()`, pre-gate smoke in a temp worktree, HITL request writer for `evo-import-*`, `apply_adopt()` (tag, meta, activate under lock), `apply_merge()` (worktree, 3-way, smoke, ff-merge, delegate on conflict), rollback target, ledger.
+- [x] 15. `POST /hitl/{sid}/{rid}/answer` hook; `POST /projects/{pid}/imports`; `GET /projects/imports/{iid}`; `scaffold/archive.py` (platform copy) additive `record_imported_version` / `imported_from` passthrough; `HitlPanel` renderer for `harness_import`.
+- [x] 16. `tests/test_imports.py`: two temp tenants; fetch; smoke; pending record shape; approve → tag + meta + detached HEAD, `state/` sha256 identical; reject prunes the ref; busy/lock 409; self-import 400; unknown 404.
 - Verify: curl, no model spend: B imports A's version → pending in `/hitl/evo-import-…/pending` with smoke ok → approve → `/versions` (B) active = imported node; `git log --all` shows two roots; switch back restores HEAD.
 
 ### Phase 5 — Tool import
-- [ ] 17. `api/imports.py::import_tools()`: source verification (`git ls-tree`), worktree off HEAD, subset checkout, role-YAML insert, commit, smoke + compat, HITL request (`kind: tool_import`), approve → ff-merge + `record_merged_version(imported_from=…)`; evolution-command fallback when the smoke fails.
-- [ ] 18. UI: checkboxes → approval card (diffstat limited to `tools/<name>/` + role YAMLs, smoke result) → "Imported tools" list.
+- [x] 17. `api/imports.py::import_tools()`: source verification (`git ls-tree`), worktree off HEAD, subset checkout, role-YAML insert, commit, smoke + compat, HITL request (`kind: tool_import`), approve → ff-merge + `record_merged_version(imported_from=…)`; evolution-command fallback when the smoke fails.
+- [x] 18. UI: checkboxes → approval card (diffstat limited to `tools/<name>/` + role YAMLs, smoke result) → "Imported tools" list.
 - Verify (no model spend): B imports one of A's tools → pending request has smoke ok and a diff touching only `tools/<name>/` and one role YAML → approve → child version; `GET /roles` lists the tool; the fallback path is exercised once live (≈$1–3) with a tool that needs a scaffold delta.
 
 ### Phase 6 — Page assembly, docs, end-to-end
-- [ ] 19. Five-step wizard wired; Review shows harness + tree context; launch gated while an import approval is pending.
-- [ ] 20. Docs: this plan ticked, ROADMAP, CLAUDE.md pointer; O1 plan note.
-- [ ] 21. End-to-end curl walkthrough (A evolves; B onboards → advisor → import harness → import tool → hypotheses → launch → supervisor's first reply restates the question and the harness); `pytest tests/ -q`; `npm run build`; push gate.
+- [x] 19. Five-step wizard wired; Review shows harness + tree context; launch gated while an import approval is pending.
+- [x] 20. Docs: this plan ticked, ROADMAP, CLAUDE.md pointer; ui3/README.
+- [x] 21. End-to-end walkthrough on the live container (see Notes, 2026-09-06 delivery); `pytest tests/ -q` (132 passed); `npm run build`; push gate.
 
 ## Files touched
 
@@ -352,6 +352,53 @@ Model spend for the full pass stays under $5.
   one filesystem works with unrelated histories (scratch pair); no tenant has
   a `ver/*` tag yet (R17 backfill pending); one tenant has a pre-R17 archive
   node with `decision.json` + `rationale.md` only.
+
+## Delivery facts (2026-09-06)
+
+- **Built on `feat/O1-onboarding`**, not a separate branch. Everything in
+  `api/` + `ui3/`; `scaffold/archive.py` gained two additive helpers
+  (`record_imported_version`, `annotate_version`) and `api/tenancy.py` now
+  writes `.git/info/exclude` for the tenant marker (an adopt checkout was
+  refused by "untracked file would be overwritten" before that).
+- **Adjacency scorer is hand-rolled.** `rank_bm25` returns negative scores
+  on tiny corpora, so `api/projects.py::bm25_scores` is BM25 with the Lucene
+  IDF normalised by the statement's own score (threshold 0.12, ≥3 shared
+  informative terms). Real adjacent statements score ~0.15–0.25; unrelated
+  ~0.01. `index.json` was not needed (nodes are read directly).
+- **Versions used vs inventory.** `links.harness_versions` holds only the
+  versions a problem RAN on (active at register/launch/completion); the
+  owner's full inventory is owner-only (`harness_inventory`). Discoverability
+  and the advisor catalogue read the former.
+- **Advisor runner** is `python -m api.advisor` with cwd = the platform root
+  (never a tenant's frozen fork); the server holds `running.lock` on the
+  child's behalf from the spawn; a statement change during a run writes
+  `rerun.flag` and the pass goes again. Daily caps: 40/user, 400 global.
+- **Imports.** Ledger records exist from the first moment (`preparing`) so
+  concurrent requests cannot prune each other's smoke worktree; approvals
+  refuse (409, request kept pending) while a turn runs or a switch is in
+  flight, then apply under the switch lock for all modes; the apply re-checks
+  HEAD against `rollback_to.sha`; deleting the `evo-import-*` session
+  withdraws the import; a `pending` record whose request file vanished
+  self-heals to `failed`. The pre-gate smoke runs with a minimal env (no
+  inherited secrets), a throwaway TMPDIR and CPU/memory/file rlimits.
+  Merge mode is decomposed (new tool packages → subset checkout; role wiring
+  → textual insert; the rest → `git apply --3way`) so the common case never
+  conflicts.
+- **Live walkthrough** (local container, two fresh accounts): Quantum lab
+  evolved `tools/decay_fit/` through the real evolution agent (approved
+  merge → `ver/…`), registered + launched its charge-noise problem; BOLD demo
+  registered three problems (two-tone transmon, LTEM Biolog with the 21-file
+  data folder uploaded, cartilage scaffolds). The advisor (served by
+  `claude-fable-5`, no refusal on the biology statement) recommended adopting
+  the Quantum lab harness for the two-tone problem (confidence 0.85, no
+  risks) and nothing for the other two ("start from scratch" with question-
+  keyed gaps); the adopt import fetched, passed the 16-test smoke gate in a
+  worktree, was approved through `POST /hitl/evo-import-…/…/answer`, and left
+  the importer on an `imported` version with two roots and a clean tree; all
+  four sessions launched, their supervisors restated the brief and the
+  harness (`decay_fit`, version 647f1199) and paused at the first checkpoint.
+  Model spend for the whole pass ≈ $6 (evolution run ≈ $3, four first turns,
+  four advisor calls ≈ $0.15 each).
 
 ## Risks
 

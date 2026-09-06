@@ -13,10 +13,15 @@ import type {
   HitlPending,
   HypSession,
   HypSummary,
+  ImportRecord,
   LibraryFile,
   LibraryHealth,
   LibraryUploadResponse,
   MemorySearchResult,
+  ProjectNear,
+  ProjectNodeView,
+  ProjectTree,
+  RecommendationsView,
   Reflection,
   RoleSummary,
   SendResult,
@@ -91,8 +96,25 @@ export interface Api {
   deleteBrief(bid: string): Promise<{ ok: boolean }>;
   previewBrief(bid: string): Promise<BriefPreview>;
   briefHypotheses(bid: string, n?: number): Promise<HypSession>;
-  launchBrief(bid: string, autonomous?: boolean): Promise<{ session_id: string; task: string; brief_id: string }>;
+  launchBrief(bid: string, autonomous?: boolean): Promise<{ session_id: string; task: string; brief_id: string; node_id?: string | null }>;
   getSessionBrief(sid: string): Promise<SessionBrief>;
+  downloadLibrary(name: string): Promise<void>;
+  // ---- project tree + advisor + imports (O2) ----
+  registerBrief(bid: string, visibility?: "org" | "private"): Promise<{ node: ProjectNodeView; changed: boolean; advisor_started: boolean; brief: BriefRecord }>;
+  projectTree(): Promise<ProjectTree>;
+  getProject(pid: string): Promise<ProjectNodeView>;
+  projectNear(pid: string): Promise<ProjectNear>;
+  patchProject(pid: string, patch: { status?: string; visibility?: "org" | "private"; keywords?: string[] }): Promise<ProjectNodeView>;
+  declareEdge(pid: string, dst: string, type: string, rationale: string): Promise<ProjectNodeView>;
+  decideEdge(pid: string, eid: string, decision: "confirm" | "reject"): Promise<ProjectNodeView>;
+  spawnBrief(pid: string): Promise<BriefRecord>;
+  advise(pid: string): Promise<{ ok: boolean; running: boolean; started: boolean }>;
+  getRecommendations(pid: string): Promise<RecommendationsView>;
+  createImport(pid: string, body: { kind: "harness" | "tool"; owner: string; version_id: string; mode?: "adopt" | "merge"; tools?: string[]; roles?: string[]; include_skills?: string[] }): Promise<ImportRecord>;
+  getImport(iid: string): Promise<ImportRecord>;
+  listImports(): Promise<ImportRecord[]>;
+  evolveImport(iid: string): Promise<{ ok: boolean; session_id: string; import: ImportRecord }>;
+  shareVersion(id: string, shared: boolean): Promise<VersionList>;
 }
 
 export interface ApiConfig {
@@ -261,6 +283,38 @@ function mapPending(r: Raw): HitlPending {
         detail: detail || undefined,
         detailMarkdown: true,
         meta: overwrite ? "overwrites an existing skill" : undefined,
+      };
+    }
+    case "harness_import":
+    case "tool_import": {
+      // O2: an import the API prepared (smoke already ran in a worktree). Show
+      // what happens, the gate result, the risks and the bounded diff.
+      const isHarness = kind === "harness_import";
+      const smoke = p?.smoke && typeof p.smoke === "object" ? (p.smoke as { ran?: boolean; ok?: boolean | null }) : null;
+      const risks = Array.isArray(p?.risks) ? (p!.risks as string[]) : [];
+      const tools = Array.isArray(p?.tools) ? (p!.tools as string[]) : [];
+      const roles = Array.isArray(p?.roles) ? (p!.roles as string[]) : [];
+      const skills = Array.isArray(p?.donor_skills) ? (p!.donor_skills as string[]) : [];
+      const diff = str("diff_preview");
+      const parts: string[] = [];
+      if (str("what_happens")) parts.push(str("what_happens")!);
+      if (str("rationale")) parts.push(`**Why the advisor recommended it:** ${str("rationale")}`);
+      if (str("from_node_title")) parts.push(`**Evolved for:** ${str("from_node_title")}`);
+      if (!isHarness && tools.length) parts.push(`**Tools:** ${tools.map((t) => "`" + t + "`").join(", ")} → wired into ${roles.join(", ")}`);
+      if (smoke) parts.push(`**Smoke + compat gate:** ${smoke.ran ? (smoke.ok ? "passed in a temporary worktree ✓" : "FAILED") : "not run (no tests in the donor tree)"}`);
+      if (risks.length) parts.push("**Risks (computed):**\n" + risks.map((r) => `- ${r}`).join("\n"));
+      if (skills.length) parts.push(`**Donor skills (not copied automatically):** ${skills.join(", ")}`);
+      if (str("diffstat")) parts.push("```\n" + str("diffstat") + "\n```");
+      if (diff) parts.push("```diff\n" + diff + "\n```");
+      return {
+        ...base,
+        action: isHarness
+          ? `Import ${str("owner_name") ?? "a colleague"}'s harness version and ${str("mode") === "merge" ? "merge it into your harness" : "switch to it"}. Approve to apply, Reject to keep your current harness.`
+          : `Add ${tools.join(", ") || "the selected tools"} from ${str("owner_name") ?? "a colleague"}'s harness to yours. Approve to fast-forward, Reject to discard the staged change.`,
+        detail: parts.join("\n\n") || undefined,
+        detailMarkdown: true,
+        requester: "project-tree advisor",
+        meta: [str("version_id"), str("mode"), smoke ? (smoke.ok ? "smoke ✓" : "smoke ✗") : null].filter(Boolean).join(" · ") || undefined,
       };
     }
     case "longjob_submit": {
@@ -621,5 +675,47 @@ export function createApi(cfg: ApiConfig): Api {
         { method: "POST", body: JSON.stringify({ autonomous }) },
       ),
     getSessionBrief: (sid) => req<SessionBrief>(`/sessions/${encodeURIComponent(sid)}/brief`),
+
+    // O2: every library file is retrievable at any time (authenticated blob download).
+    async downloadLibrary(name) {
+      const token = cfg.getToken();
+      const headers = new Headers();
+      if (token) headers.set("Authorization", `Bearer ${token}`);
+      const res = await fetch(url(`/library/files/download?name=${encodeURIComponent(name)}`), { headers });
+      if (res.status === 401) {
+        cfg.onUnauthorized();
+        throw new HttpError(401, "Unauthorized");
+      }
+      if (!res.ok) throw new HttpError(res.status, `download ${res.status}`);
+      const blob = await res.blob();
+      const href = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = href;
+      a.download = name.split("/").pop() ?? "download";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(href);
+    },
+
+    // ---- project tree + advisor + imports (O2) ----
+    registerBrief: (bid, visibility) =>
+      req(`/onboarding/briefs/${encodeURIComponent(bid)}/register`, { method: "POST", body: JSON.stringify(visibility ? { visibility } : {}) }),
+    projectTree: () => req<ProjectTree>("/projects/tree"),
+    getProject: (pid) => req<ProjectNodeView>(`/projects/${encodeURIComponent(pid)}`),
+    projectNear: (pid) => req<ProjectNear>(`/projects/${encodeURIComponent(pid)}/near`),
+    patchProject: (pid, patch) => req<ProjectNodeView>(`/projects/${encodeURIComponent(pid)}`, { method: "PATCH", body: JSON.stringify(patch) }),
+    declareEdge: (pid, dst, type, rationale) =>
+      req<ProjectNodeView>(`/projects/${encodeURIComponent(pid)}/edges`, { method: "POST", body: JSON.stringify({ dst, type, rationale }) }),
+    decideEdge: (pid, eid, decision) =>
+      req<ProjectNodeView>(`/projects/${encodeURIComponent(pid)}/edges/${encodeURIComponent(eid)}/${decision}`, { method: "POST" }),
+    spawnBrief: (pid) => req<BriefRecord>(`/projects/${encodeURIComponent(pid)}/spawn-brief`, { method: "POST" }),
+    advise: (pid) => req(`/projects/${encodeURIComponent(pid)}/advise`, { method: "POST" }),
+    getRecommendations: (pid) => req<RecommendationsView>(`/projects/${encodeURIComponent(pid)}/recommendations`),
+    createImport: (pid, body) => req<ImportRecord>(`/projects/${encodeURIComponent(pid)}/imports`, { method: "POST", body: JSON.stringify(body) }),
+    getImport: (iid) => req<ImportRecord>(`/projects/imports/${encodeURIComponent(iid)}`),
+    listImports: () => req<ImportRecord[]>("/projects/imports"),
+    evolveImport: (iid) => req(`/projects/imports/${encodeURIComponent(iid)}/evolve`, { method: "POST" }),
+    shareVersion: (id, shared) => req<VersionList>(`/versions/${encodeURIComponent(id)}/share`, { method: "POST", body: JSON.stringify({ shared }) }),
   };
 }
