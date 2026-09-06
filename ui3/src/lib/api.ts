@@ -1,6 +1,10 @@
 import { streamEvents } from "./sse";
 import type {
   AuthMe,
+  BriefFields,
+  BriefPreview,
+  BriefRecord,
+  BriefSummary,
   Ev,
   CommitDetail,
   GitHistory,
@@ -14,6 +18,7 @@ import type {
   MemorySearchResult,
   RoleSummary,
   SendResult,
+  SessionBrief,
   SessionFile,
   SessionSummary,
 } from "./types";
@@ -70,6 +75,16 @@ export interface Api {
   selectHypothesis(hid: string, hypId: string, note?: string): Promise<HypSession>;
   getHypothesis(hid: string): Promise<HypSession>;
   listHypothesisSessions(): Promise<HypSummary[]>;
+  // ---- onboarding phase (O1): problem brief → data → hypotheses → launch ----
+  createBrief(fields: Partial<BriefFields>): Promise<BriefRecord>;
+  listBriefs(): Promise<BriefSummary[]>;
+  getBrief(bid: string): Promise<BriefRecord>;
+  updateBrief(bid: string, patch: Partial<BriefFields>): Promise<BriefRecord>;
+  deleteBrief(bid: string): Promise<{ ok: boolean }>;
+  previewBrief(bid: string): Promise<BriefPreview>;
+  briefHypotheses(bid: string, n?: number): Promise<HypSession>;
+  launchBrief(bid: string, autonomous?: boolean): Promise<{ session_id: string; task: string; brief_id: string }>;
+  getSessionBrief(sid: string): Promise<SessionBrief>;
 }
 
 export interface ApiConfig {
@@ -106,6 +121,9 @@ function mapSession(r: Raw): SessionSummary {
     blocked: last_kind === "hitl.pending",
     last_kind,
     updated: (r.last_ts as string | null) ?? undefined,
+    has_brief: Boolean(r.has_brief),
+    brief_title: (r.brief_title as string | null) ?? null,
+    hypothesis: (r.hypothesis as string | null) ?? null,
   };
 }
 
@@ -232,7 +250,26 @@ export function createApi(cfg: ApiConfig): Api {
       cfg.onUnauthorized(); // clear + bounce to login (§7.5)
       throw new HttpError(401, "Unauthorized");
     }
-    if (!res.ok) throw new HttpError(res.status, `${res.status} ${res.statusText}`);
+    if (!res.ok) {
+      // Carry the server's `detail` (a string, or a structured object such as
+      // the launch validation {missing, data}) so callers can show the reason.
+      let detail = `${res.status} ${res.statusText}`;
+      try {
+        const body = (await res.json()) as { detail?: unknown };
+        if (typeof body.detail === "string") detail = body.detail;
+        else if (body.detail && typeof body.detail === "object") {
+          const d = body.detail as Record<string, unknown>;
+          const parts: string[] = [];
+          if (Array.isArray(d.missing) && d.missing.length) parts.push(`missing: ${(d.missing as string[]).join(", ")}`);
+          if (Array.isArray(d.data) && d.data.length) parts.push(`data: ${(d.data as string[]).join("; ")}`);
+          if (typeof d.detail === "string") parts.unshift(d.detail);
+          if (parts.length) detail = parts.join(" — ");
+        }
+      } catch {
+        /* non-JSON error body */
+      }
+      throw new HttpError(res.status, detail);
+    }
     if (res.status === 204) return undefined as T;
     const ct = res.headers.get("content-type") ?? "";
     return (ct.includes("application/json") ? await res.json() : await res.text()) as T;
@@ -419,5 +456,31 @@ export function createApi(cfg: ApiConfig): Api {
       }),
     getHypothesis: (hid) => req<HypSession>(`/hypothesis/${encodeURIComponent(hid)}`),
     listHypothesisSessions: () => req<HypSummary[]>("/hypothesis/sessions"),
+
+    // ---- onboarding phase (O1) ----
+    createBrief: (fields) =>
+      req<BriefRecord>("/onboarding/briefs", { method: "POST", body: JSON.stringify(fields) }),
+    listBriefs: () => req<BriefSummary[]>("/onboarding/briefs"),
+    getBrief: (bid) => req<BriefRecord>(`/onboarding/briefs/${encodeURIComponent(bid)}`),
+    updateBrief: (bid, patch) =>
+      req<BriefRecord>(`/onboarding/briefs/${encodeURIComponent(bid)}`, {
+        method: "PUT",
+        body: JSON.stringify(patch),
+      }),
+    deleteBrief: (bid) =>
+      req<{ ok: boolean }>(`/onboarding/briefs/${encodeURIComponent(bid)}`, { method: "DELETE" }),
+    previewBrief: (bid) => req<BriefPreview>(`/onboarding/briefs/${encodeURIComponent(bid)}/preview`),
+    // Generation can take 10-30s (same as the Hypotheses page).
+    briefHypotheses: (bid, n) =>
+      req<HypSession>(`/onboarding/briefs/${encodeURIComponent(bid)}/hypotheses`, {
+        method: "POST",
+        body: JSON.stringify({ n }),
+      }),
+    launchBrief: (bid, autonomous = false) =>
+      req<{ session_id: string; task: string; brief_id: string }>(
+        `/onboarding/briefs/${encodeURIComponent(bid)}/launch`,
+        { method: "POST", body: JSON.stringify({ autonomous }) },
+      ),
+    getSessionBrief: (sid) => req<SessionBrief>(`/sessions/${encodeURIComponent(sid)}/brief`),
   };
 }

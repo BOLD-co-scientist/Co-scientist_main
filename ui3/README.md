@@ -75,18 +75,42 @@ src/
     TopBar, SessionRail, Workbench
     EventStream, EventItem, Composer      ← the signature timeline
     RightRail, HitlPanel, FilesPanel, ContextPanel
-    HypothesisView, HypothesisTree                  research-direction forking tree
+    OnboardingView                        ← the onboarding phase (O1): brief → data → hypotheses → launch
+    HypothesisView, HypothesisCards       parallel-set hypothesis explorer (cards shared with onboarding)
     EvolutionView, EvolutionGraph, ActivityLog      evolution: capability lineage + log
 ```
+
+## Onboarding phase (O1)
+
+"New session" opens `OnboardingView`, a four-step wizard backed by
+`/onboarding/briefs/*` (see `docs/plans/O1-onboarding.md`):
+
+1. **Define the problem** — the fixed brief format (title + research question
+   required; domain, background, objectives, constraints, success criteria,
+   deliverables). Autosaved as a server-side draft; drafts can be resumed.
+2. **Data** — upload files/folders to the library and *attach* them to the brief
+   with a one-line description each.
+3. **Hypothesis search** — the parallel-set generator seeded from the whole
+   brief; selecting a card makes it the session's working hypothesis (synced
+   server-side).
+4. **Review & launch** — the exact first-turn message the supervisor will
+   receive (`GET …/preview`), then `POST …/launch`.
+
+A brief-launched session shows a pinned bar (working hypothesis + "view
+brief") and a `session.brief` bubble at the top of its timeline. "Quick start
+instead" keeps the old free-form composer path. `npm run dev:mock` runs the
+whole flow against the in-memory mock.
 
 ## Hypotheses & Evolution
 
 Two distinct left-rail sections:
 
-- **Hypotheses** — the forking research-direction map. The system proposes
-  hypotheses at each fork; the human **pursues** one (which parks its siblings
-  and reveals the next fork), **revisits** a parked branch, or **explores
-  further** from a settled node. A client-side planning artifact.
+- **Hypotheses** — free-form parallel-set exploration backed by the real
+  generator (`POST /hypothesis/sessions`, `…/refine`, `…/select`; Fable with an
+  Opus fallback). State a goal, get a few competing hypotheses, select one or
+  "explore from" one to get a fresh set. The onboarding phase runs the same
+  search seeded from the full problem brief; this page remains for scratch
+  exploration outside a session.
 - **Evolution** — two tabs. **Graph**: the capability lineage — skills the
   system has taught itself, rooted at the harness core and branching by
   direction, each node merged / in-flight / proposed; a proposed skill can

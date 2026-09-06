@@ -40,6 +40,12 @@ class SessionSummary(BaseModel):
     last_ts: str | None = None
     last_kind: str | None = None
     running: bool = False
+    # O1 onboarding: set when the session was launched from a problem brief
+    # (state/sessions/<sid>/brief.json). `hypothesis` is the working hypothesis
+    # statement the human selected during onboarding, if any.
+    has_brief: bool = False
+    brief_title: str | None = None
+    hypothesis: str | None = None
 
 
 class HumanDirective(BaseModel):
@@ -115,6 +121,107 @@ class RefineHypothesisRequest(BaseModel):
     parent_id: str
     feedback: str | None = None
     n: int | None = None
+
+
+# ---- Onboarding phase (O1): fixed-format problem brief ----
+# The human defines the problem, attaches data, and runs the hypothesis search
+# BEFORE the research session exists. Launch freezes the brief into the session.
+# Rendering + validation: api/onboarding.py. Plan: docs/plans/O1-onboarding.md.
+
+
+class BriefDataItem(BaseModel):
+    path: str  # library-relative POSIX path (e.g. "panel/ic50.csv")
+    description: str = ""
+    # Stamped by the server when the path is resolved (preview / launch);
+    # ignored on input.
+    size: int | None = None
+    is_dir: bool = False
+    file_count: int | None = None
+    files: list[str] | None = None  # bounded inner listing for folders
+
+
+class ProblemBrief(BaseModel):
+    """The fixed format. Every field is optional while drafting; `title` and
+    `research_question` are required to launch."""
+
+    title: str = ""
+    domain: str = ""
+    background: str = ""
+    research_question: str = ""
+    objectives: list[str] = []
+    data: list[BriefDataItem] = []
+    data_notes: str = ""
+    constraints: str = ""
+    success_criteria: str = ""
+    deliverables: list[str] = []
+
+
+class BriefPatch(BaseModel):
+    """Partial update: only the fields present are changed."""
+
+    title: str | None = None
+    domain: str | None = None
+    background: str | None = None
+    research_question: str | None = None
+    objectives: list[str] | None = None
+    data: list[BriefDataItem] | None = None
+    data_notes: str | None = None
+    constraints: str | None = None
+    success_criteria: str | None = None
+    deliverables: list[str] | None = None
+
+
+class BriefHypothesis(BaseModel):
+    id: str | None = None
+    statement: str
+    rationale: str = ""
+    note: str | None = None
+
+
+class BriefRecord(ProblemBrief):
+    id: str
+    status: str  # "draft" | "launched"
+    created: str
+    updated: str
+    hypothesis_session_id: str | None = None
+    hypothesis: BriefHypothesis | None = None
+    session_id: str | None = None
+
+
+class BriefSummary(BaseModel):
+    id: str
+    title: str
+    research_question: str = ""
+    status: str
+    created: str | None = None
+    updated: str | None = None
+    session_id: str | None = None
+    hypothesis_session_id: str | None = None
+    hypothesis: str | None = None
+    data_count: int = 0
+
+
+class BriefHypothesesRequest(BaseModel):
+    n: int | None = None
+
+
+class LaunchBriefRequest(BaseModel):
+    autonomous: bool = False
+
+
+class LaunchBriefResponse(BaseModel):
+    session_id: str
+    task: str
+    brief_id: str
+
+
+class BriefPreview(BaseModel):
+    text: str  # the exact first-turn message the supervisor will receive
+    missing: list[str]  # required fields still empty
+    data_problems: list[str] = []  # attached paths that would fail at launch
+    size_bytes: int = 0  # UTF-8 size of `text` (it travels as one argv element)
+    max_bytes: int = 0
+    too_large: bool = False
 
 
 class HitlAnswer(BaseModel):

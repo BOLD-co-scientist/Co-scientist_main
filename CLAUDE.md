@@ -71,6 +71,22 @@ human ──HTTP──▶ api/server.py ──spawns──▶ research/runtime.p
 - Supervisor's MCP tools: `bus`, `memory`, `hitl`, `fs_read`, `fs_write_workspace`, `Task` (built-in).
 - Subagents inherit those servers; each role's `tools` list in YAML gates what they can call.
 - Evolution agent's tools: `edit`, `bash_ro`, `bash_sandbox`, `run_tests`, `propose_merge`, `memory`.
+- **Onboarding phase (O1).** Sessions normally start from a fixed-format
+  *problem brief* (`api/onboarding.py`, routes under `/onboarding/briefs/*`):
+  define the problem → attach library data → run the hypothesis search →
+  launch. Launch freezes the brief to `state/sessions/<sid>/brief.json`, emits
+  `session.brief`, and passes the rendered brief as the supervisor's first-turn
+  message. The brief is composed **API-side**, not in `research/runtime.py`,
+  because per-user harness roots are frozen forks (see below). Plan:
+  [docs/plans/O1-onboarding.md](docs/plans/O1-onboarding.md).
+
+**Per-user harness roots are frozen forks.** `api/tenancy.py:ensure_user_root`
+copies `scaffold/`, `research/`, `evolution/`, `tools/`, `roles/`, `prompts/`
+into `state/users/<uid>/root/` **once**, and the runtime subprocesses run from
+that copy (`cwd=ctx.root`, `PYTHONPATH=root`). A later change on `main` to any
+of those dirs does **not** reach existing users; only the shared `api/` is
+always current. Put tenant-independent behaviour in `api/` (or add an explicit
+upgrade path) — don't assume a runtime/prompt edit is live for everyone.
 
 ## Sandboxing layers — invariants future you must preserve
 

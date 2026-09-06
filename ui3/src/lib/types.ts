@@ -31,6 +31,79 @@ export interface SessionSummary {
   last_kind?: string;
   created?: string;
   updated?: string;
+  /** O1: the session was launched from a problem brief (server-authoritative). */
+  has_brief?: boolean;
+  brief_title?: string | null;
+  /** Working hypothesis statement chosen during onboarding, if any. */
+  hypothesis?: string | null;
+}
+
+// ---- Onboarding phase (O1): fixed-format problem brief ----
+// Mirrors api/schemas.py ProblemBrief / BriefRecord. The shape is fixed: every
+// field is always present (empty when unfilled); title + research_question are
+// required to launch. Rendering + the opening message are server-side.
+export interface BriefDataItem {
+  path: string; // library-relative POSIX path
+  description: string;
+  size?: number | null;
+  is_dir?: boolean;
+}
+
+export interface BriefFields {
+  title: string;
+  domain: string;
+  background: string;
+  research_question: string;
+  objectives: string[];
+  data: BriefDataItem[];
+  data_notes: string;
+  constraints: string;
+  success_criteria: string;
+  deliverables: string[];
+}
+
+export interface BriefHypothesis {
+  id?: string | null;
+  statement: string;
+  rationale: string;
+  note?: string | null;
+}
+
+export interface BriefRecord extends BriefFields {
+  id: string;
+  status: "draft" | "launched";
+  created: string;
+  updated: string;
+  hypothesis_session_id: string | null;
+  hypothesis: BriefHypothesis | null;
+  session_id: string | null;
+}
+
+export interface BriefSummary {
+  id: string;
+  title: string;
+  research_question: string;
+  status: "draft" | "launched";
+  created?: string | null;
+  updated?: string | null;
+  session_id: string | null;
+  hypothesis_session_id: string | null;
+  hypothesis: string | null;
+  data_count: number;
+}
+
+export interface BriefPreview {
+  text: string; // the exact first-turn message the supervisor receives
+  missing: string[]; // required fields still empty
+  data_problems: string[]; // attachments that would fail at launch
+  size_bytes: number; // the message travels as one argv element (128 KiB cap on Linux)
+  max_bytes: number;
+  too_large: boolean;
+}
+
+/** GET /sessions/{sid}/brief — the frozen brief plus its rendered text. */
+export interface SessionBrief extends BriefRecord {
+  text: string;
 }
 
 export interface Ev {

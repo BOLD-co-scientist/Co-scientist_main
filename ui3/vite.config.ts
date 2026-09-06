@@ -22,6 +22,7 @@ const API_PREFIXES = [
   "/health",
   "/evolution",
   "/hypothesis",
+  "/onboarding",
 ];
 
 export default defineConfig({

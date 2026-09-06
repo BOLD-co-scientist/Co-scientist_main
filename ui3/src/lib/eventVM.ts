@@ -37,6 +37,7 @@ export type EventVM =
 // Session-lifecycle + checkpoint kinds → the timeline spine.
 const SPINE: Record<string, string> = {
   "session.start": "session started",
+  "session.autonomous": "autonomous mode — HITL gates auto-answer",
   "turn.start": "new turn",
   "session.turn_result": "turn complete",
   "session.idle": "idle — awaiting you",
@@ -247,7 +248,12 @@ export function toVM(e: Ev, prev?: Ev): EventVM {
     tone: (e.actor === "human" ? "human" : "agent") as "human" | "agent" | "ok",
   };
   if (e.kind === "research.requested")
-    return { ...base, label: "Research task", body: s("task") ?? "" };
+    return { ...base, label: s("brief_id") ? "Research task · from a problem brief" : "Research task", body: s("task") ?? "" };
+  // O1: the frozen problem brief handed to the supervisor at launch. The full
+  // rendered text rides on the event so the timeline shows exactly what the
+  // agent received.
+  if (e.kind === "session.brief")
+    return { ...base, label: "Problem brief", body: firstStr("text") ?? s("title") ?? "" };
   if (e.kind === "research.complete")
     return { ...base, tone: "ok", label: "Research complete", body: firstStr("summary", "text") ?? "" };
 

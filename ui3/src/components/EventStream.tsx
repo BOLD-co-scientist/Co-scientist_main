@@ -1,21 +1,22 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useApp } from "../state/store";
 import { toVM } from "../lib/eventVM";
 import EventItem from "./EventItem";
 import Composer from "./Composer";
 
 export default function EventStream() {
-  const { active, status, events, hasPending, pending, setRightTab, stop, workingHyp, clearWorkingHyp, setMainView, draftNew } = useApp();
+  const { active, status, events, hasPending, pending, setRightTab, stop, workingHyp, clearWorkingHyp, setMainView, draftNew, startNewSession, sessionBrief } = useApp();
   const scRef = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
+  const [showBrief, setShowBrief] = useState(false);
 
   useEffect(() => {
     const el = scRef.current;
     if (el && stick.current) el.scrollTop = el.scrollHeight;
   }, [events.length]);
 
-  // New-session draft: an empty session with just the composer — the user's
-  // first message creates the real session.
+  // Quick-start draft: an empty session with just the composer — the user's
+  // first message creates the real session from a free-form task.
   if (!active && draftNew) {
     return (
       <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
@@ -27,10 +28,13 @@ export default function EventStream() {
           </div>
         )}
         <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", color: "var(--lo)", gap: 6, padding: 24, textAlign: "center" }}>
-          <div style={{ fontSize: 15, fontWeight: 600, color: "var(--mid)" }}>New research session</div>
-          <div style={{ fontSize: 13, maxWidth: 420, lineHeight: 1.5 }}>
+          <div style={{ fontSize: 15, fontWeight: 600, color: "var(--mid)" }}>Quick start</div>
+          <div style={{ fontSize: 13, maxWidth: 440, lineHeight: 1.5 }}>
             Describe your research task below and press Enter to start. {workingHyp ? "Your working hypothesis will frame it." : ""}
           </div>
+          <button onClick={startNewSession} style={{ marginTop: 8, fontSize: 12.5, color: "var(--accent)", fontWeight: 600 }}>
+            Prefer the guided onboarding (problem brief · data · hypothesis search)? →
+          </button>
         </div>
         <Composer />
       </div>
@@ -39,8 +43,11 @@ export default function EventStream() {
 
   if (!active) {
     return (
-      <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--lo)", fontSize: 13 }}>
-        Select a session, or start a new one.
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", color: "var(--lo)", fontSize: 13, gap: 10 }}>
+        <div>Select a session, or start a new one.</div>
+        <button onClick={startNewSession} style={{ padding: "9px 16px", background: "var(--accent-soft)", border: "1px solid var(--accent-dim)", color: "var(--accent)", borderRadius: 9, fontWeight: 600, fontSize: 13 }}>
+          + New session
+        </button>
       </div>
     );
   }
@@ -49,9 +56,33 @@ export default function EventStream() {
 
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
+      {/* brief bar (O1) — a session launched from a problem brief is anchored on
+          its own frozen brief + working hypothesis; the page-level one is not
+          appended to its messages */}
+      {active.has_brief && (
+        <div style={{ background: "var(--accent-soft)", borderBottom: "1px solid var(--accent-dim)" }}>
+          <div style={{ padding: "10px 24px", display: "flex", alignItems: "center", gap: 11 }}>
+            <span style={{ fontFamily: "var(--mono)", fontSize: 9.5, fontWeight: 700, color: "var(--accent)", textTransform: "uppercase", letterSpacing: ".06em", flex: "0 0 auto" }}>
+              {active.hypothesis ? "Working hypothesis" : "Problem brief"}
+            </span>
+            <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: "var(--hi)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={active.hypothesis ?? active.brief_title ?? ""}>
+              {active.hypothesis ?? "No working hypothesis was selected during onboarding."}
+            </span>
+            <button onClick={() => setShowBrief((s) => !s)} style={{ fontSize: 11.5, fontWeight: 600, color: "var(--accent)", fontFamily: "var(--mono)", flex: "0 0 auto" }}>
+              {showBrief ? "hide brief" : "view brief"}
+            </button>
+          </div>
+          {showBrief && (
+            <pre style={{ margin: "0 24px 12px", padding: "12px 14px", maxHeight: 320, overflowY: "auto", background: "var(--bg1)", border: "1px solid var(--border)", borderRadius: 10, fontFamily: "var(--mono)", fontSize: 11.5, color: "var(--hi)", whiteSpace: "pre-wrap", lineHeight: 1.55 }}>
+              {sessionBrief?.text ?? "Loading brief…"}
+            </pre>
+          )}
+        </div>
+      )}
+
       {/* working-hypothesis bar — pinned at the very top; passed to the agent as
-          context and persists here until cleared */}
-      {workingHyp && (
+          context and persists here until cleared (free-form sessions only) */}
+      {workingHyp && !active.has_brief && (
         <div style={{ padding: "10px 24px", background: "var(--accent-soft)", borderBottom: "1px solid var(--accent-dim)", display: "flex", alignItems: "center", gap: 11, animation: "fade .3s ease" }}>
           <span style={{ fontFamily: "var(--mono)", fontSize: 9.5, fontWeight: 700, color: "var(--accent)", textTransform: "uppercase", letterSpacing: ".06em", flex: "0 0 auto" }}>Working hypothesis</span>
           <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: "var(--hi)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={workingHyp.statement}>

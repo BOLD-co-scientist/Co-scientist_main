@@ -6,6 +6,7 @@
   "description": "CoScientist UI3 — Vite + React + TS + Tailwind workbench for the AI coscientist.",
   "scripts": {
     "dev": "vite",
+    "dev:mock": "VITE_MOCK=1 vite --port 5174",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit"

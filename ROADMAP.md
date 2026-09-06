@@ -12,6 +12,7 @@ R1, R5, R2 are being implemented in **parallel worktrees**. See [docs/plans/PARA
 
 | ID | Feature | Status | Plan | Branch | Worktree |
 |---|---|---|---|---|---|
+| **O1** | Onboarding phase — fixed-format problem brief → data upload/attach → hypothesis search *before* the session → launch (supervisor gets the whole brief as its first turn) | 🟢 Built + backend-verified live (brief CRUD, live Fable generation, select→brief sync, launch, `session.brief` event). UI wizard is the default "New session"; free-form quick start kept. | [O1-onboarding.md](docs/plans/O1-onboarding.md) | `feat/O1-onboarding` | — |
 | **R1** | Replayable event log (telemetry + cassette replay) | Planned | [R1-replay-event-log.md](docs/plans/R1-replay-event-log.md) | `feat/R1-replay` | `../coscientist-R1` |
 | **R5** | Cost ledger + tier routing + caching | Planned | [R5-cost-tier-routing.md](docs/plans/R5-cost-tier-routing.md) | `feat/R5-cost` | `../coscientist-R5` |
 | **R2** | Reflection → cross-session lessons buffer | Planned | [R2-reflection-lessons.md](docs/plans/R2-reflection-lessons.md) | `feat/R2-reflection` | `../coscientist-R2` |

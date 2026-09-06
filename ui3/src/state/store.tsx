@@ -21,6 +21,7 @@ import type {
   LibraryHealth,
   MemoryHit,
   RoleSummary,
+  SessionBrief,
   SessionFile,
   SessionSummary,
 } from "../lib/types";
@@ -28,9 +29,10 @@ import type {
 const TOKEN_KEY = "csk_token";
 const THEME_KEY = "cs_theme";
 const HYP_KEY = "cs_active_hyp"; // persisted id of the open hypothesis session
+const BRIEF_KEY = "cs_active_brief"; // persisted id of the onboarding draft being edited
 const USE_MOCK = import.meta.env.VITE_MOCK === "1";
 
-type MainView = "session" | "hypothesis" | "evolution";
+type MainView = "session" | "hypothesis" | "evolution" | "onboarding";
 type RightTab = "hitl" | "files" | "context";
 type Theme = "dark" | "light";
 
@@ -55,8 +57,18 @@ interface AppCtx {
   createSession: (task: string) => void;
   refreshSessions: () => Promise<void>;
   draftNew: boolean;
+  /** "New session" — opens the onboarding phase (O1): brief → data → hypotheses → launch. */
   startNewSession: () => void;
+  /** Quick start: the free-form composer path (no brief). */
+  startQuickSession: () => void;
   queue: string[];
+
+  // ---- onboarding phase (O1) ----
+  onboardingBriefId: string | null;
+  setOnboardingBriefId: (bid: string | null) => void;
+  launchBrief: (bid: string) => Promise<string | null>;
+  /** The frozen brief of the active session (null for free-form sessions). */
+  sessionBrief: SessionBrief | null;
 
   events: Ev[];
   pending: HitlPending[];
@@ -79,7 +91,8 @@ interface AppCtx {
   library: LibraryFile[];
   libraryHealth: LibraryHealth | null;
   loadLibrary: () => void;
-  uploadFiles: (files: FileList | File[]) => Promise<void>;
+  /** Uploads to the library; resolves with the library paths that actually landed. */
+  uploadFiles: (files: FileList | File[]) => Promise<string[]>;
   deleteLibrary: (name: string) => Promise<void>;
 
   roles: RoleSummary[];
@@ -145,6 +158,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [memory, setMemory] = useState<MemoryHit[]>([]);
   const [git, setGit] = useState<GitHistory | null>(null);
   const [hyp, setHypState] = useState<HypSession | null>(null);
+  const [onboardingBriefId, setOnboardingBriefIdState] = useState<string | null>(
+    () => localStorage.getItem(BRIEF_KEY),
+  );
+  const [sessionBrief, setSessionBrief] = useState<SessionBrief | null>(null);
+
+  const setOnboardingBriefId = useCallback((bid: string | null) => {
+    setOnboardingBriefIdState(bid);
+    if (bid) localStorage.setItem(BRIEF_KEY, bid);
+    else localStorage.removeItem(BRIEF_KEY);
+  }, []);
 
   // Lives in the store (not the view) so the open hypothesis session survives
   // switching away from the Hypotheses page; the id is persisted so it also
@@ -168,6 +191,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   activeIdRef.current = activeId;
   const workingHypRef = useRef<HypCard | null>(null);
   workingHypRef.current = workingHyp;
+  // A session launched from a brief already carries its working hypothesis in
+  // the brief itself — never append the page-level one to its messages.
+  const activeHasBriefRef = useRef(false);
 
   const logout = useCallback(() => {
     tokenRef.current = null;
@@ -269,6 +295,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           const blocked = list.find((s) => s.blocked);
           setActiveId((blocked ?? list[0]).session_id);
         }
+        // First-time user: there is nothing to look at yet, so open the
+        // onboarding phase directly instead of an empty timeline.
+        if (!list.length) setMainView("onboarding");
       } catch {
         /* ignore */
       }
@@ -349,6 +378,27 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, [sessions, activeId, pending]);
   const status = active ? statusOf(active) : null;
   const hasPending = pending.length > 0;
+  activeHasBriefRef.current = Boolean(active?.has_brief);
+
+  // ---- the active session's frozen brief (O1) ----
+  useEffect(() => {
+    if (!authed || !activeId || !active?.has_brief) {
+      setSessionBrief(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const b = await api.getSessionBrief(activeId);
+        if (!cancelled) setSessionBrief(b);
+      } catch {
+        if (!cancelled) setSessionBrief(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [authed, activeId, active?.has_brief, api]);
 
   // ---- actions ----
   const select = useCallback((sid: string) => {
@@ -371,6 +421,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     (text: string, full: boolean): string => {
       const w = workingHypRef.current;
       if (!w) return text;
+      // Follow-ups in a brief-launched session: the brief already anchors the
+      // agent on its own working hypothesis; don't append the page-level one.
+      if (!full && activeHasBriefRef.current) return text;
       // Append the hypothesis AFTER the user's text so the session title (which
       // is the task's first line) stays clean; the agent still gets the context.
       const ctx = full
@@ -395,15 +448,40 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     [api, refreshSessions, select, withHyp],
   );
 
-  // "New session" opens an empty compose view (no backend session yet); the
-  // first message the user sends creates the real session.
-  const startNewSession = useCallback(() => {
+  // Quick start: an empty compose view (no backend session yet); the first
+  // message the user sends creates the real session from a free-form task.
+  const startQuickSession = useCallback(() => {
     setDraftNew(true);
     setActiveId(null);
     setEvents([]);
     setQueue([]);
     setMainView("session");
   }, []);
+
+  // "New session" = the onboarding phase (O1). The wizard owns the draft; the
+  // store just routes there and remembers which draft is open.
+  const startNewSession = useCallback(() => {
+    setDraftNew(false);
+    setMainView("onboarding");
+  }, []);
+
+  // Launch a brief → the server creates the session and starts its first turn
+  // with the whole brief; we then open that session like any other.
+  const launchBrief = useCallback(
+    async (bid: string): Promise<string | null> => {
+      try {
+        const { session_id } = await api.launchBrief(bid);
+        setOnboardingBriefId(null);
+        await refreshSessions();
+        select(session_id);
+        return session_id;
+      } catch (e) {
+        setSendNotice(e instanceof HttpError ? `Launch failed: ${e.message}` : "Launch failed.");
+        return null;
+      }
+    },
+    [api, refreshSessions, select, setOnboardingBriefId],
+  );
 
   const send = useCallback(
     async (text: string): Promise<boolean> => {
@@ -538,20 +616,35 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, [api]);
 
   const uploadFiles = useCallback(
-    async (fl: FileList | File[]) => {
+    async (fl: FileList | File[]): Promise<string[]> => {
       const arr = Array.from(fl);
+      const landed: string[] = [];
+      let failed = 0;
+      let skipped = 0;
       for (const f of arr) {
+        // A directory picker sets webkitRelativePath (e.g. "panel/ic50.csv");
+        // pass it so the server preserves the folder structure. A plain file
+        // picker leaves it empty → flat upload at the library root.
+        const rel = (f as File & { webkitRelativePath?: string }).webkitRelativePath;
+        const relpath = rel && rel.trim() ? rel : undefined;
+        // The server rejects dotfiles (.DS_Store, .git/…) per segment; a macOS
+        // folder upload always contains some. Skip them silently instead of
+        // reporting the whole folder as failed.
+        if ((relpath ?? f.name).split("/").some((seg) => seg.startsWith("."))) {
+          skipped += 1;
+          continue;
+        }
         try {
-          // A directory picker sets webkitRelativePath (e.g. "panel/ic50.csv");
-          // pass it so the server preserves the folder structure. A plain file
-          // picker leaves it empty → flat upload at the library root.
-          const rel = (f as File & { webkitRelativePath?: string }).webkitRelativePath;
-          await api.uploadLibrary(f, undefined, rel && rel.trim() ? rel : undefined);
+          const r = await api.uploadLibrary(f, undefined, relpath);
+          landed.push(r.name ?? relpath ?? f.name);
         } catch (e) {
-          setSendNotice(e instanceof HttpError && e.status === 413 ? "File too large for the library." : "Upload failed.");
+          failed += 1;
+          setSendNotice(e instanceof HttpError && e.status === 413 ? `File too large for the library: ${f.name}` : `Upload failed: ${f.name}`);
         }
       }
+      if (!failed && skipped && !landed.length) setSendNotice("Only hidden files were selected; nothing uploaded.");
       await loadLibrary();
+      return landed;
     },
     [api, loadLibrary],
   );
@@ -635,7 +728,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     refreshSessions,
     draftNew,
     startNewSession,
+    startQuickSession,
     queue,
+    onboardingBriefId,
+    setOnboardingBriefId,
+    launchBrief,
+    sessionBrief,
     events,
     pending,
     hasPending,

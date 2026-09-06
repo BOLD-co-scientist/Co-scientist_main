@@ -1,6 +1,6 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useApp } from "../state/store";
-import type { HypSession } from "../lib/types";
+import HypothesisCards from "./HypothesisCards";
 
 // Hypotheses page — parallel-set flow.
 //
@@ -9,6 +9,10 @@ import type { HypSession } from "../lib/types";
 // spawns a fresh parallel set derived from that choice. Rounds accumulate so the
 // human can step back through the exploration. Backed by real generations
 // (api/hypothesis.py — Fable, falling back to Opus on refusal).
+//
+// The onboarding phase (O1, OnboardingView) runs this same search seeded from
+// the whole problem brief BEFORE a session exists; the cards are shared
+// (HypothesisCards). This page remains for free-form exploration.
 //
 // TODO(H1): swap the interim generator for the Google AI co-scientist protocol
 // (generate → reflect → rank via Elo tournament → evolve → meta-review). Contract
@@ -19,23 +23,10 @@ const EXAMPLE = "Why do some bacterial populations tolerate antibiotics without 
 export default function HypothesisView() {
   // The hypothesis session lives in the store so it persists across page
   // switches and reloads; the view keeps only transient UI state.
-  const { api, hyp: session, setHyp: setSession } = useApp();
+  const { api, hyp: session, setHyp: setSession, startNewSession } = useApp();
   const [goal, setGoal] = useState("");
   const [loading, setLoading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [viewRound, setViewRound] = useState(0);
-  const [refiningId, setRefiningId] = useState<string | null>(null);
-  const [feedback, setFeedback] = useState("");
-
-  const round = session?.rounds[viewRound] ?? null;
-  const parentCard = useMemo(() => {
-    if (!session || !round || round.parent_id == null) return null;
-    for (const r of session.rounds) {
-      const p = r.hypotheses.find((h) => h.id === round.parent_id);
-      if (p) return p;
-    }
-    return null;
-  }, [session, round]);
 
   const generate = async () => {
     const g = goal.trim();
@@ -43,9 +34,7 @@ export default function HypothesisView() {
     setLoading("Generating hypotheses…");
     setError(null);
     try {
-      const rec = await api.startHypothesis(g);
-      setSession(rec);
-      setViewRound(0);
+      setSession(await api.startHypothesis(g));
     } catch {
       setError("Generation failed. Try rephrasing the goal.");
     } finally {
@@ -53,16 +42,12 @@ export default function HypothesisView() {
     }
   };
 
-  const refine = async (parentId: string) => {
+  const refine = async (parentId: string, feedback: string) => {
     if (!session) return;
     setLoading("Generating a new set from your pick…");
     setError(null);
     try {
-      const rec = await api.refineHypothesis(session.id, parentId, feedback.trim() || undefined);
-      setSession(rec);
-      setViewRound(rec.rounds.length - 1);
-      setRefiningId(null);
-      setFeedback("");
+      setSession(await api.refineHypothesis(session.id, parentId, feedback || undefined));
     } catch {
       setError("Refinement failed. Try different feedback.");
     } finally {
@@ -83,9 +68,6 @@ export default function HypothesisView() {
     setSession(null);
     setGoal("");
     setError(null);
-    setViewRound(0);
-    setRefiningId(null);
-    setFeedback("");
   };
 
   return (
@@ -99,7 +81,7 @@ export default function HypothesisView() {
             <span style={{ fontFamily: "var(--mono)", fontSize: 10, fontWeight: 600, padding: "2px 7px", borderRadius: 5, background: "var(--bg2)", color: "var(--lo)" }} title="Interim generator; the Google co-scientist protocol is planned (docs/plans/H1)">interim</span>
           </div>
           <div style={{ marginTop: 4, fontSize: 12, color: "var(--mid)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            {session ? session.goal : "State a goal; the AI proposes parallel hypotheses. Pick one, or pick one and say what to do differently."}
+            {session ? session.goal : "Free-form exploration. To start a session, use New session — the onboarding phase runs this search from your full problem brief."}
           </div>
         </div>
         {session && (
@@ -117,99 +99,17 @@ export default function HypothesisView() {
 
       {/* body */}
       {!session ? (
-        <GoalPrompt goal={goal} setGoal={setGoal} onGenerate={generate} loading={loading} />
+        <GoalPrompt goal={goal} setGoal={setGoal} onGenerate={generate} loading={loading} onOnboarding={startNewSession} />
       ) : (
         <div style={{ flex: 1, overflowY: "auto", padding: "16px 24px 28px" }}>
-          {/* round nav */}
-          {session.rounds.length > 1 && (
-            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
-              {session.rounds.map((r, i) => (
-                <button
-                  key={i}
-                  onClick={() => { setViewRound(i); setRefiningId(null); }}
-                  style={{ fontFamily: "var(--mono)", fontSize: 11, padding: "4px 10px", borderRadius: 7, border: `1px solid ${i === viewRound ? "var(--accent)" : "var(--border)"}`, background: i === viewRound ? "var(--accent-soft)" : "transparent", color: i === viewRound ? "var(--accent)" : "var(--mid)" }}
-                >
-                  {i === 0 ? "Round 1 · goal" : `Round ${i + 1}`}
-                </button>
-              ))}
-            </div>
-          )}
-
-          {/* lineage for refined rounds */}
-          {parentCard && (
-            <div style={{ marginBottom: 14, padding: "10px 13px", background: "var(--bg2)", border: "1px solid var(--border)", borderLeft: "2px solid var(--accent)", borderRadius: "0 9px 9px 0" }}>
-              <div style={{ fontSize: 10.5, fontWeight: 600, color: "var(--lo)", textTransform: "uppercase", letterSpacing: ".06em" }}>Refined from</div>
-              <div style={{ marginTop: 3, fontSize: 12.5, color: "var(--hi)", lineHeight: 1.4 }}>{parentCard.statement}</div>
-              {round?.feedback && (
-                <div style={{ marginTop: 5, fontSize: 12, color: "var(--mid)" }}>
-                  <span style={{ color: "var(--lo)" }}>your steer: </span>{round.feedback}
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* served-by note */}
-          {round && (
-            <div style={{ marginBottom: 10, fontSize: 11, color: "var(--lo)", fontFamily: "var(--mono)" }}>
-              {round.hypotheses.length} parallel hypotheses · generated by {round.served_by}
-            </div>
-          )}
-
-          {/* parallel cards */}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 12, opacity: loading ? 0.5 : 1, transition: "opacity .2s", pointerEvents: loading ? "none" : "auto" }}>
-            {round?.hypotheses.map((h, i) => {
-              const selected = session.selected_id === h.id;
-              const open = refiningId === h.id;
-              return (
-                <div key={h.id} style={{ border: `1.5px solid ${selected ? "var(--ok)" : "var(--border)"}`, background: selected ? "var(--ok-soft)" : "var(--bg1)", borderRadius: 12, padding: "14px 15px", display: "flex", flexDirection: "column", gap: 8 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <span style={{ fontFamily: "var(--mono)", fontSize: 10, fontWeight: 700, color: "var(--accent)" }}>{String.fromCharCode(65 + i)}</span>
-                    {selected && <span style={{ fontFamily: "var(--mono)", fontSize: 9.5, fontWeight: 700, padding: "1px 6px", borderRadius: 5, background: "var(--ok)", color: "#04160c", textTransform: "uppercase", letterSpacing: ".05em" }}>selected</span>}
-                  </div>
-                  <div style={{ fontSize: 14, fontWeight: 600, color: "var(--hi)", lineHeight: 1.35 }}>{h.statement}</div>
-                  {h.rationale && <div style={{ fontSize: 12.5, color: "var(--mid)", lineHeight: 1.5 }}>{h.rationale}</div>}
-                  <div style={{ flex: 1 }} />
-                  <div style={{ display: "flex", gap: 8, marginTop: 2 }}>
-                    <button onClick={() => void select(h.id)} style={{ flex: 1, padding: "8px 10px", background: selected ? "var(--bg2)" : "var(--ok)", color: selected ? "var(--mid)" : "#04160c", border: selected ? "1px solid var(--border)" : "none", fontWeight: 700, borderRadius: 8, fontSize: 12.5 }}>
-                      {selected ? "Selected ✓" : "Select"}
-                    </button>
-                    <button onClick={() => { setRefiningId(open ? null : h.id); setFeedback(""); }} style={{ flex: 1, padding: "8px 10px", background: open ? "var(--accent-soft)" : "var(--bg2)", color: "var(--accent)", border: `1px solid ${open ? "var(--accent)" : "var(--border)"}`, fontWeight: 600, borderRadius: 8, fontSize: 12.5 }}>
-                      Explore from this →
-                    </button>
-                  </div>
-                  {open && (
-                    <div style={{ marginTop: 4, display: "flex", flexDirection: "column", gap: 7 }}>
-                      <textarea
-                        autoFocus
-                        value={feedback}
-                        onChange={(e) => setFeedback(e.target.value)}
-                        placeholder="What should the next set do differently? (optional)"
-                        rows={2}
-                        style={{ resize: "none", padding: "8px 10px", background: "var(--bg0)", border: "1px solid var(--border)", borderRadius: 8, color: "var(--hi)", fontSize: 12.5, outline: "none" }}
-                      />
-                      <button onClick={() => void refine(h.id)} style={{ padding: "8px 10px", background: "var(--accent)", color: "#06121c", fontWeight: 700, borderRadius: 8, fontSize: 12.5 }}>
-                        Generate a new set from this
-                      </button>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-
-          {loading && (
-            <div style={{ marginTop: 16, display: "flex", alignItems: "center", gap: 10, color: "var(--mid)", fontSize: 13 }}>
-              <span style={{ width: 9, height: 9, borderRadius: "50%", background: "var(--accent)", animation: "pulse 1.4s infinite" }} />
-              {loading} <span style={{ color: "var(--lo)", fontSize: 12 }}>(can take up to a minute)</span>
-            </div>
-          )}
+          <HypothesisCards session={session} loading={loading} onSelect={(id) => void select(id)} onRefine={(p, f) => void refine(p, f)} />
         </div>
       )}
     </div>
   );
 }
 
-function GoalPrompt({ goal, setGoal, onGenerate, loading }: { goal: string; setGoal: (s: string) => void; onGenerate: () => void; loading: string | null }) {
+function GoalPrompt({ goal, setGoal, onGenerate, loading, onOnboarding }: { goal: string; setGoal: (s: string) => void; onGenerate: () => void; loading: string | null; onOnboarding: () => void }) {
   return (
     <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 24 }}>
       <div style={{ maxWidth: 620, width: "100%" }}>
@@ -246,7 +146,10 @@ function GoalPrompt({ goal, setGoal, onGenerate, loading }: { goal: string; setG
             </span>
           )}
         </div>
-        <div style={{ marginTop: 22, fontSize: 11.5, color: "var(--lo)", lineHeight: 1.5 }}>
+        <div style={{ marginTop: 18, fontSize: 12.5, color: "var(--mid)", lineHeight: 1.5 }}>
+          Starting a research session? Use <button onClick={onOnboarding} style={{ color: "var(--accent)", fontWeight: 600 }}>New session</button> — the onboarding phase runs this search from your full problem brief (question, data, constraints) and carries the pick into the session.
+        </div>
+        <div style={{ marginTop: 14, fontSize: 11.5, color: "var(--lo)", lineHeight: 1.5 }}>
           {"⚠"} Interim generator. The full Google AI co-scientist protocol (generate → reflect → rank via tournament → evolve) is planned — see <span style={{ fontFamily: "var(--mono)" }}>docs/plans/H1-hypothesis-coscientist.md</span>.
         </div>
       </div>

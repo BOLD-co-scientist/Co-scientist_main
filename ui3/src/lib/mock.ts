@@ -1,15 +1,76 @@
 import type { Api, StreamHandle } from "./api";
 import type {
+  BriefRecord,
   Ev,
   GitHistory,
   HitlPending,
   EvoLogEntry,
+  HypSession,
   LibraryFile,
   RoleSummary,
   SessionSummary,
   Skill,
   SkillDir,
 } from "./types";
+
+// ---- onboarding (O1) mock helpers: the fixed brief shape + a rendering that
+// mirrors api/onboarding.py closely enough for design review ----
+export function emptyBrief(): Omit<BriefRecord, "id" | "status" | "created" | "updated" | "hypothesis_session_id" | "hypothesis" | "session_id"> {
+  return {
+    title: "",
+    domain: "",
+    background: "",
+    research_question: "",
+    objectives: [],
+    data: [],
+    data_notes: "",
+    constraints: "",
+    success_criteria: "",
+    deliverables: [],
+  };
+}
+
+function renderMockBrief(b: BriefRecord): string {
+  const num = (xs: string[], empty: string) => (xs.length ? xs.map((x, i) => `${i + 1}. ${x}`).join("\n") : `_${empty}_`);
+  const para = (s: string, empty: string) => (s.trim() ? s.trim() : `_${empty}_`);
+  const data = b.data.length
+    ? b.data.map((d) => `- \`state/library/${d.path}\`${d.description ? ` — ${d.description}` : ""}`).join("\n")
+    : "_No data files were attached to this brief._";
+  const hyp = b.hypothesis
+    ? `**Statement:** ${b.hypothesis.statement}${b.hypothesis.rationale ? `\n**Rationale:** ${b.hypothesis.rationale}` : ""}`
+    : "_No working hypothesis was selected during onboarding._";
+  return [
+    `# Problem brief: ${b.title || "(untitled)"}`,
+    b.domain ? `**Domain:** ${b.domain}` : "",
+    "",
+    "## Background",
+    para(b.background, "No background given."),
+    "",
+    "## Research question",
+    para(b.research_question, "No research question given."),
+    "",
+    "## Objectives",
+    num(b.objectives, "No explicit objectives — derive them from the research question."),
+    "",
+    "## Data",
+    data,
+    b.data_notes ? `\n**Data notes:** ${b.data_notes}` : "",
+    "",
+    "## Constraints",
+    para(b.constraints, "None stated."),
+    "",
+    "## Success criteria",
+    para(b.success_criteria, "None stated."),
+    "",
+    "## Deliverables",
+    num(b.deliverables, "None stated — default to a written report under results/."),
+    "",
+    "## Working hypothesis",
+    hyp,
+  ]
+    .filter((l) => l !== "")
+    .join("\n");
+}
 
 // ============================================================
 // Seed data for the Evolution view (a designed-but-stubbed surface until
@@ -181,6 +242,25 @@ export function createMockApi(): Api {
   };
   const delay = <T,>(v: T, ms = 260): Promise<T> => new Promise((r) => setTimeout(() => r(v), ms));
 
+  // ---- onboarding (O1) state ----
+  const briefs: BriefRecord[] = [];
+  const briefLinks = new Map<string, string>(); // hypothesis session id → brief id
+  const sessionBriefs = new Map<string, BriefRecord>();
+
+  const mockStartHypothesis = (goal: string, n = 4, briefId?: string): Promise<HypSession> => {
+    const hyps = MOCK_HYPS.slice(0, n).map((h, i) => ({ ...h, id: `h0_${i}`, round: 0 }));
+    const rec = {
+      id: `hyp-${MOCK_HYP_STORE.length + 1}`,
+      goal,
+      created: "2026-07-20 00:00:00",
+      selected_id: null as string | null,
+      rounds: [{ round: 0, parent_id: null, feedback: null, served_by: "claude-opus-4-8 (mock)", hypotheses: hyps }],
+    };
+    MOCK_HYP_STORE.push(rec);
+    if (briefId) briefLinks.set(rec.id, briefId);
+    return delay(clone(rec), 700);
+  };
+
   return {
     authMe: () => delay({ user_id: "u_alice", display_name: "alice", root: "/data/alice" }),
     listSessions: () => delay(clone(sessions)),
@@ -319,18 +399,7 @@ export function createMockApi(): Api {
     spawnEvolution: (command) => delay({ session_id: "evo-mock-1", command }),
 
     // ---- hypothesis engine (mock: canned parallel sets, deterministic) ----
-    startHypothesis: (goal, n = 4) => {
-      const hyps = MOCK_HYPS.slice(0, n).map((h, i) => ({ ...h, id: `h0_${i}`, round: 0 }));
-      const rec = {
-        id: `hyp-${MOCK_HYP_STORE.length + 1}`,
-        goal,
-        created: "2026-07-20 00:00:00",
-        selected_id: null as string | null,
-        rounds: [{ round: 0, parent_id: null, feedback: null, served_by: "claude-opus-4-8 (mock)", hypotheses: hyps }],
-      };
-      MOCK_HYP_STORE.push(rec);
-      return delay(clone(rec), 700);
-    },
+    startHypothesis: (goal, n = 4) => mockStartHypothesis(goal, n),
     refineHypothesis: (hid, parentId, feedback, n = 4) => {
       const rec = MOCK_HYP_STORE.find((r) => r.id === hid)!;
       const round = rec.rounds.length;
@@ -348,6 +417,13 @@ export function createMockApi(): Api {
       const rec = MOCK_HYP_STORE.find((r) => r.id === hid)!;
       rec.selected_id = hypId;
       rec.select_note = note ?? null;
+      // Server-side sync: a brief-linked search writes the choice into the brief.
+      const bid = briefLinks.get(hid);
+      const brief = bid ? briefs.find((b) => b.id === bid) : undefined;
+      if (brief && brief.hypothesis_session_id === hid) {
+        const card = rec.rounds.flatMap((r) => r.hypotheses).find((h) => h.id === hypId);
+        brief.hypothesis = card ? { id: card.id, statement: card.statement, rationale: card.rationale, note: note ?? null } : null;
+      }
       return delay(clone(rec));
     },
     getHypothesis: (hid) => delay(clone(MOCK_HYP_STORE.find((r) => r.id === hid)!)),
@@ -362,5 +438,82 @@ export function createMockApi(): Api {
           selected_id: r.selected_id,
         })),
       ),
+
+    // ---- onboarding phase (O1): in-memory briefs mirroring api/onboarding.py ----
+    createBrief: (fields) => {
+      const rec: BriefRecord = {
+        ...emptyBrief(),
+        ...fields,
+        id: `brief-${briefs.length + 1}`,
+        status: "draft",
+        created: "2026-07-20 00:00:00",
+        updated: "2026-07-20 00:00:00",
+        hypothesis_session_id: null,
+        hypothesis: null,
+        session_id: null,
+      };
+      briefs.unshift(rec);
+      return delay(clone(rec));
+    },
+    listBriefs: () =>
+      delay(
+        briefs.map((b) => ({
+          id: b.id,
+          title: b.title,
+          research_question: b.research_question,
+          status: b.status,
+          created: b.created,
+          updated: b.updated,
+          session_id: b.session_id,
+          hypothesis_session_id: b.hypothesis_session_id,
+          hypothesis: b.hypothesis?.statement ?? null,
+          data_count: b.data.length,
+        })),
+      ),
+    getBrief: (bid) => delay(clone(briefs.find((b) => b.id === bid)!)),
+    updateBrief: (bid, patch) => {
+      const rec = briefs.find((b) => b.id === bid)!;
+      Object.assign(rec, patch);
+      return delay(clone(rec));
+    },
+    deleteBrief: (bid) => {
+      const i = briefs.findIndex((b) => b.id === bid);
+      if (i >= 0) briefs.splice(i, 1);
+      return delay({ ok: true });
+    },
+    previewBrief: (bid) => {
+      const rec = briefs.find((b) => b.id === bid)!;
+      const missing = (["title", "research_question"] as const).filter((f) => !rec[f].trim());
+      const text = renderMockBrief(rec);
+      const size = new TextEncoder().encode(text).length;
+      return delay({ text, missing, data_problems: [], size_bytes: size, max_bytes: 100_000, too_large: size > 100_000 });
+    },
+    briefHypotheses: async (bid, n = 4) => {
+      const rec = briefs.find((b) => b.id === bid)!;
+      const hyp = await mockStartHypothesis(rec.research_question || rec.title, n, rec.id);
+      rec.hypothesis_session_id = hyp.id;
+      rec.hypothesis = null; // a fresh search resets the selection
+      return hyp;
+    },
+    launchBrief: (bid) => {
+      const rec = briefs.find((b) => b.id === bid)!;
+      const id = "s_" + rid().slice(0, 4);
+      sessions.unshift({ session_id: id, task: rec.title, running: false, blocked: false, last_kind: "session.idle", has_brief: true, brief_title: rec.title, hypothesis: rec.hypothesis?.statement ?? null });
+      events[id] = [
+        ev(rid(), nextTs().slice(11), "human", "research.requested", { task: rec.title, brief_id: rec.id }),
+        ev(rid(), nextTs().slice(11), "human", "session.brief", { brief_id: rec.id, title: rec.title, text: renderMockBrief(rec) }),
+        ev(rid(), nextTs().slice(11), "system", "session.start"),
+        ev(rid(), nextTs().slice(11), "system", "session.idle"),
+      ];
+      rec.status = "launched";
+      rec.session_id = id;
+      sessionBriefs.set(id, rec);
+      return delay({ session_id: id, task: rec.title, brief_id: rec.id }, 500);
+    },
+    getSessionBrief: (sid) => {
+      const rec = sessionBriefs.get(sid);
+      if (!rec) return Promise.reject(new Error("404"));
+      return delay({ ...clone(rec), text: renderMockBrief(rec) });
+    },
   };
 }

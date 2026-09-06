@@ -49,11 +49,21 @@ def _system() -> str:
     )
 
 
-def _user(goal: str, parent: dict | None, feedback: str | None, n: int) -> str:
+def _user(
+    goal: str, parent: dict | None, feedback: str | None, n: int, context: str | None = None
+) -> str:
+    # O1 onboarding: the goal may come with the rest of the problem brief
+    # (background, data, constraints). Give the generator that context so the
+    # candidates are grounded in this problem, not a one-line prompt.
+    ctx_block = (
+        f"\n\nContext from the researcher's problem brief (respect the data and constraints):\n{context.strip()}"
+        if context and context.strip()
+        else ""
+    )
     if parent is None:
-        return f"Research goal: {goal}\n\nGenerate {n} distinct, competing hypotheses."
+        return f"Research goal: {goal}{ctx_block}\n\nGenerate {n} distinct, competing hypotheses."
     lines = [
-        f"Research goal: {goal}",
+        f"Research goal: {goal}{ctx_block}",
         "",
         "The researcher chose to build on this hypothesis:",
         f"- {parent.get('statement', '')}",
@@ -114,15 +124,21 @@ async def _call(client: AsyncAnthropic, model: str, system: str, user: str) -> t
 
 
 async def generate(
-    goal: str, parent: dict | None = None, feedback: str | None = None, n: int = 4
+    goal: str,
+    parent: dict | None = None,
+    feedback: str | None = None,
+    n: int = 4,
+    context: str | None = None,
 ) -> tuple[list[dict], str]:
     """Generate `n` parallel hypotheses. Returns (hypotheses, served_by_model).
 
     Tries the Fable model first; on a refusal/empty/error, retries on the
     fallback model so science content (which Fable often declines) still works.
+    `context` (optional) is the rest of the problem brief when the search is
+    seeded from onboarding (O1).
     """
     client = AsyncAnthropic()
-    system, user = _system(), _user(goal, parent, feedback, n)
+    system, user = _system(), _user(goal, parent, feedback, n, context)
 
     served = HYPOTHESIS_MODEL
     text = ""

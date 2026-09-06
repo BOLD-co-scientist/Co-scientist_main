@@ -21,6 +21,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from scaffold import sandbox, settings
 from scaffold._atomic import append_jsonl, read_json, write_json
 
+from . import onboarding as _onboarding
 from . import schemas
 from .auth import User, require_user
 from .tenancy import UserContext, context_for
@@ -253,13 +254,19 @@ async def _spawn_research(
     ]
     if resume_uuid:
         argv += ["--resume", resume_uuid]
-    proc = await asyncio.create_subprocess_exec(
-        *argv,
-        cwd=str(ctx.root),
-        env=_runtime_env(ctx),
-        stdout=log_fh,
-        stderr=log_fh,
-    )
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *argv,
+            cwd=str(ctx.root),
+            env=_runtime_env(ctx),
+            stdout=log_fh,
+            stderr=log_fh,
+        )
+    except Exception:
+        # e.g. E2BIG when the message exceeds the kernel's per-argv limit.
+        # Don't leak the log handle; let the caller decide what to clean up.
+        log_fh.close()
+        raise
     _RUNNING[_monitor_key(ctx, sid)] = proc
     asyncio.create_task(_monitor_runtime(ctx, sid, proc, log_fh))
 
@@ -402,6 +409,10 @@ def list_sessions(ctx: UserContext = Depends(_ctx)):
                     last_ts = rec.get("ts")
             except Exception:
                 last_kind = "unreadable"
+        # O1: a session launched from a problem brief carries a frozen copy of
+        # it; surface the title + working hypothesis so the UI can anchor on them.
+        brief = _read_session_brief(ctx, sd.name)
+        hyp = brief.get("hypothesis") if brief else None
         out.append(
             schemas.SessionSummary(
                 session_id=sd.name,
@@ -410,9 +421,37 @@ def list_sessions(ctx: UserContext = Depends(_ctx)):
                 last_ts=last_ts,
                 last_kind=last_kind,
                 running=_monitor_key(ctx, sd.name) in _RUNNING,
+                has_brief=brief is not None,
+                brief_title=(brief.get("title") or None) if brief else None,
+                hypothesis=(hyp.get("statement") or None) if isinstance(hyp, dict) else None,
             )
         )
     return out
+
+
+def _read_session_brief(ctx: UserContext, sid: str) -> dict | None:
+    # A corrupt/truncated brief.json must never take GET /sessions down for the
+    # whole tenant — treat it as "no brief".
+    try:
+        rec = read_json(ctx.session_dir(sid) / _onboarding.BRIEF_FILENAME, None)
+    except Exception:
+        return None
+    return rec if isinstance(rec, dict) else None
+
+
+@app.get("/sessions/{sid}/brief")
+def session_brief(sid: str, ctx: UserContext = Depends(_ctx)):
+    """The problem brief this session was launched from (O1), frozen at launch.
+    404 for sessions started from a free-form task."""
+    sid = _safe_sid(sid)
+    if not _session_exists(ctx, sid):
+        raise HTTPException(404, "unknown session")
+    rec = _read_session_brief(ctx, sid)
+    if rec is None:
+        raise HTTPException(404, "this session was not started from a problem brief")
+    rec = dict(rec)
+    rec["text"] = _onboarding.render_brief(rec, ctx.library)
+    return rec
 
 
 @app.get("/sessions/{sid}/events")
@@ -491,7 +530,16 @@ def delete_session(sid: str, ctx: UserContext = Depends(_ctx)):
     target = ctx.session_dir(sid)
     if not target.exists():
         raise HTTPException(404, "unknown session")
+    # O1: a session launched from a brief owns that brief's "launched" status.
+    # Deleting the session hands the brief back as a draft so it can be edited
+    # and relaunched instead of being stranded (frozen, hidden from drafts).
+    brief = _read_session_brief(ctx, sid)
     shutil.rmtree(target)
+    if brief and brief.get("id"):
+        draft = _onboarding.load_brief(ctx.state, str(brief["id"]))
+        if draft and draft.get("session_id") == sid:
+            draft.update({"status": "draft", "session_id": None})
+            _onboarding.save_brief(ctx.state, draft)
     return {"ok": True, "session_id": sid}
 
 
@@ -514,12 +562,16 @@ def _safe_library_relpath(raw: str) -> Path:
     segment is validated (no ``..``, no absolute, no ``.staging``, no leading
     dots) and the result is confirmed to resolve inside the library root. The
     guard is enforced here, at the tool layer, not in the caller."""
+    if "\x00" in raw or len(raw) > 4096:
+        raise HTTPException(400, "invalid path: NUL byte or too long")
     parts = [seg for seg in Path(raw.replace("\\", "/")).as_posix().split("/") if seg]
     if not parts:
         raise HTTPException(400, f"invalid path: {raw!r}")
     for seg in parts:
         if seg in {"", ".", "..", ".staging"} or seg.startswith("."):
             raise HTTPException(400, f"invalid path segment {seg!r} in {raw!r}")
+        if len(seg) > 255:
+            raise HTTPException(400, f"path segment too long in {raw!r}")
     rel = Path(*parts)
     # Belt-and-suspenders: confirm it stays inside the library after resolving.
     return rel
@@ -926,6 +978,7 @@ def _hyp_summary(rec: dict) -> dict:
         "rounds": len(rounds),
         "latest_count": len(latest.get("hypotheses", [])),
         "selected_id": rec.get("selected_id"),
+        "brief_id": rec.get("brief_id"),  # O1: set when seeded from a problem brief
     }
 
 
@@ -948,16 +1001,11 @@ def get_hypothesis(hid: str, ctx: UserContext = Depends(_ctx)):
     return rec
 
 
-@app.post("/hypothesis/sessions")
-async def start_hypothesis(req: schemas.StartHypothesisRequest, ctx: UserContext = Depends(_ctx)):
-    goal = (req.goal or "").strip()
-    if not goal:
-        raise HTTPException(400, "goal must not be empty")
-    n = (req.config.n_initial if req.config and req.config.n_initial else None) or 4
-    n = max(2, min(6, n))
-    hyps, served = await _hypothesis.generate(goal, n=n)
-    if not hyps:
-        raise HTTPException(502, "hypothesis generation returned nothing; try rephrasing the goal")
+def _create_hyp_session(
+    ctx: UserContext, goal: str, hyps: list[dict], served: str, **extra: Any
+) -> dict:
+    """Persist a new hypothesis session (round 0). Shared by the free-form
+    Hypotheses page and the onboarding brief (O1), which adds ``brief_id``."""
     _new_hyp_id(hyps, 0)
     hid = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
     rec = {
@@ -968,9 +1016,33 @@ async def start_hypothesis(req: schemas.StartHypothesisRequest, ctx: UserContext
         "rounds": [
             {"round": 0, "parent_id": None, "feedback": None, "served_by": served, "hypotheses": hyps}
         ],
+        **extra,
     }
     write_json(_hyp_path(ctx, hid), rec)
     return rec
+
+
+def _find_hyp_card(rec: dict, hyp_id: str | None) -> dict | None:
+    if not hyp_id:
+        return None
+    for rnd in rec.get("rounds", []):
+        for h in rnd.get("hypotheses", []):
+            if h.get("id") == hyp_id:
+                return h
+    return None
+
+
+@app.post("/hypothesis/sessions")
+async def start_hypothesis(req: schemas.StartHypothesisRequest, ctx: UserContext = Depends(_ctx)):
+    goal = (req.goal or "").strip()
+    if not goal:
+        raise HTTPException(400, "goal must not be empty")
+    n = (req.config.n_initial if req.config and req.config.n_initial else None) or 4
+    n = max(2, min(6, n))
+    hyps, served = await _hypothesis.generate(goal, n=n)
+    if not hyps:
+        raise HTTPException(502, "hypothesis generation returned nothing; try rephrasing the goal")
+    return _create_hyp_session(ctx, goal, hyps, served)
 
 
 @app.post("/hypothesis/{hid}/refine")
@@ -991,7 +1063,10 @@ async def refine_hypothesis(
     if parent is None:
         raise HTTPException(404, f"no hypothesis {req.parent_id} in this session")
     n = max(2, min(6, req.n or 4))
-    hyps, served = await _hypothesis.generate(rec["goal"], parent=parent, feedback=req.feedback, n=n)
+    # A brief-seeded search (O1) carries its brief context; keep it for refines.
+    hyps, served = await _hypothesis.generate(
+        rec["goal"], parent=parent, feedback=req.feedback, n=n, context=rec.get("context")
+    )
     if not hyps:
         raise HTTPException(502, "hypothesis generation returned nothing; try different feedback")
     round_no = len(rec["rounds"])
@@ -1019,13 +1094,306 @@ def select_hypothesis(
     rec = read_json(path, None)
     if not rec:
         raise HTTPException(404, "unknown hypothesis session")
-    ids = {h["id"] for rnd in rec.get("rounds", []) for h in rnd.get("hypotheses", [])}
-    if req.hypothesis_id not in ids:
+    card = _find_hyp_card(rec, req.hypothesis_id)
+    if card is None:
         raise HTTPException(404, f"no hypothesis {req.hypothesis_id} in this session")
     rec["selected_id"] = req.hypothesis_id
     rec["select_note"] = (req.note or "").strip() or None
     write_json(path, rec)
+    # O1: a search seeded from a problem brief keeps the brief's working
+    # hypothesis in sync, server-side, so the UI never has to copy it across.
+    _sync_brief_hypothesis(ctx, rec)
     return rec
+
+
+def _sync_brief_hypothesis(ctx: UserContext, hyp_rec: dict) -> None:
+    bid = hyp_rec.get("brief_id")
+    if not bid:
+        return
+    brief = _onboarding.load_brief(ctx.state, bid)
+    if brief is None or brief.get("status") == "launched":
+        return
+    if brief.get("hypothesis_session_id") != hyp_rec.get("id"):
+        return  # the brief has since been re-seeded; this search is stale
+    card = _find_hyp_card(hyp_rec, hyp_rec.get("selected_id"))
+    brief["hypothesis"] = (
+        {
+            "id": card.get("id"),
+            "statement": card.get("statement", ""),
+            "rationale": card.get("rationale", ""),
+            "note": hyp_rec.get("select_note"),
+        }
+        if card
+        else None
+    )
+    _onboarding.save_brief(ctx.state, brief)
+
+
+# ---------- onboarding (O1): problem brief → data → hypothesis search → launch ----------
+#
+# The human defines the problem in a fixed format, attaches library files, and
+# runs the hypothesis search BEFORE the research session exists. Launch freezes
+# the brief into the session dir and hands it to the supervisor as its first
+# turn. Rendering/validation live in api/onboarding.py; plan in
+# docs/plans/O1-onboarding.md.
+
+
+def _safe_bid(raw: str) -> str:
+    if not re.fullmatch(r"[A-Za-z0-9_.:-]+", raw or ""):
+        raise HTTPException(400, f"invalid brief id: {raw!r}")
+    return raw
+
+
+def _load_brief_or_404(ctx: UserContext, bid: str) -> dict:
+    rec = _onboarding.load_brief(ctx.state, _safe_bid(bid))
+    if rec is None:
+        raise HTTPException(404, "unknown brief")
+    return rec
+
+
+def _resolve_brief_data(ctx: UserContext, rec: dict) -> list[str]:
+    """Validate every attached data path against the library (traversal-guarded)
+    and stamp sizes. Returns a list of problems (empty when all resolve)."""
+    problems: list[str] = []
+    for item in rec.get("data") or []:
+        raw = item.get("path", "")
+        try:
+            rel = _safe_library_relpath(raw)
+            target = _resolve_library_path(ctx, rel)
+            exists = target.exists()
+        except HTTPException as e:
+            problems.append(f"{raw}: {e.detail}")
+            continue
+        except (OSError, ValueError) as e:
+            # NUL bytes, over-long names, unreadable mounts: a data problem the
+            # human can fix, never a 500.
+            problems.append(f"{raw}: invalid path ({e.__class__.__name__})")
+            continue
+        if not exists:
+            problems.append(f"{raw}: not found in the library")
+            continue
+        item["path"] = rel.as_posix()
+        if target.is_file():
+            try:
+                item["size"] = target.stat().st_size
+            except OSError:
+                item["size"] = None
+        else:
+            # A folder: size is the sum of its files (folder uploads keep
+            # structure); keep a bounded inner listing for the brief. Skip
+            # dotfiles/hidden dirs, matching what the library view shows and
+            # what fs_read will serve.
+            total = 0
+            count = 0
+            files: list[str] = []
+            for p in sorted(target.rglob("*")):
+                if not p.is_file():
+                    continue
+                inner = p.relative_to(target)
+                if any(seg.startswith(".") for seg in inner.parts):
+                    continue
+                count += 1
+                try:
+                    total += p.stat().st_size
+                except OSError:
+                    pass
+                if len(files) < _onboarding.FOLDER_LISTING_LIMIT:
+                    files.append(inner.as_posix())
+            item["size"] = total
+            item["is_dir"] = True
+            item["file_count"] = count
+            item["files"] = files
+    return problems
+
+
+def _apply_brief_patch(rec: dict, fields: dict) -> None:
+    try:
+        _onboarding.merge_fields(rec, fields)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+
+
+@app.post("/onboarding/briefs", response_model=schemas.BriefRecord)
+def create_brief(body: schemas.ProblemBrief, ctx: UserContext = Depends(_ctx)):
+    rec = _onboarding.new_record({})
+    _apply_brief_patch(rec, body.model_dump())
+    _onboarding.save_brief(ctx.state, rec)
+    return rec
+
+
+@app.get("/onboarding/briefs", response_model=list[schemas.BriefSummary])
+def list_briefs(ctx: UserContext = Depends(_ctx)):
+    return [_onboarding.summary(r) for r in _onboarding.list_briefs(ctx.state)]
+
+
+@app.get("/onboarding/briefs/{bid}", response_model=schemas.BriefRecord)
+def get_brief(bid: str, ctx: UserContext = Depends(_ctx)):
+    return _load_brief_or_404(ctx, bid)
+
+
+@app.put("/onboarding/briefs/{bid}", response_model=schemas.BriefRecord)
+def update_brief(bid: str, body: schemas.BriefPatch, ctx: UserContext = Depends(_ctx)):
+    rec = _load_brief_or_404(ctx, bid)
+    if rec.get("status") == "launched":
+        raise HTTPException(409, "brief already launched; it is frozen with its session")
+    _apply_brief_patch(rec, body.model_dump(exclude_unset=True))
+    _onboarding.save_brief(ctx.state, rec)
+    return rec
+
+
+@app.delete("/onboarding/briefs/{bid}")
+def delete_brief(bid: str, ctx: UserContext = Depends(_ctx)):
+    _load_brief_or_404(ctx, bid)
+    _onboarding.brief_path(ctx.state, _safe_bid(bid)).unlink(missing_ok=True)
+    return {"ok": True, "brief_id": bid}
+
+
+@app.get("/onboarding/briefs/{bid}/preview", response_model=schemas.BriefPreview)
+def preview_brief(bid: str, ctx: UserContext = Depends(_ctx)):
+    """Exactly what the supervisor will receive as its first turn, plus which
+    required fields are still empty — so the human reviews the real thing."""
+    rec = _load_brief_or_404(ctx, bid)
+    # Resolve data on a copy so the preview shows sizes exactly as launch will,
+    # and surfaces unresolvable attachments before the human hits Launch.
+    probe = json.loads(json.dumps(rec))
+    problems = _resolve_brief_data(ctx, probe)
+    text = _onboarding.opening_message(probe, ctx.library)
+    size = len(text.encode("utf-8"))
+    return schemas.BriefPreview(
+        text=text,
+        missing=_onboarding.missing_required(rec),
+        data_problems=problems,
+        size_bytes=size,
+        max_bytes=_onboarding.OPENING_MESSAGE_MAX_BYTES,
+        too_large=size > _onboarding.OPENING_MESSAGE_MAX_BYTES,
+    )
+
+
+@app.post("/onboarding/briefs/{bid}/hypotheses")
+async def brief_hypotheses(
+    bid: str, req: schemas.BriefHypothesesRequest, ctx: UserContext = Depends(_ctx)
+):
+    """Run the hypothesis search seeded from the whole brief (not a one-liner)
+    and link the resulting session to the brief. Refine/select through the
+    regular ``/hypothesis/{hid}/*`` routes; a select syncs back into the brief."""
+    rec = _load_brief_or_404(ctx, bid)
+    if rec.get("status") == "launched":
+        raise HTTPException(409, "brief already launched")
+    goal, context = _onboarding.brief_goal(rec)
+    if not goal:
+        raise HTTPException(422, "fill in the research question (or title) before generating hypotheses")
+    n = max(2, min(6, req.n or 4))
+    hyps, served = await _hypothesis.generate(goal, n=n, context=context)
+    if not hyps:
+        raise HTTPException(502, "hypothesis generation returned nothing; try sharpening the research question")
+    # Persist the brief context on the search so refine rounds stay grounded
+    # in the same problem (and survive later edits/deletion of the brief).
+    hyp_rec = _create_hyp_session(ctx, goal, hyps, served, brief_id=rec["id"], context=context)
+    rec["hypothesis_session_id"] = hyp_rec["id"]
+    rec["hypothesis"] = None  # a fresh search resets the selection
+    _onboarding.save_brief(ctx.state, rec)
+    return hyp_rec
+
+
+# Briefs whose launch is in flight (the model-free part is quick, but the spawn
+# awaits). Two concurrent launches of one brief must not spawn two runtimes.
+_LAUNCHING: set[tuple[str, str]] = set()
+
+
+@app.post("/onboarding/briefs/{bid}/launch", response_model=schemas.LaunchBriefResponse)
+async def launch_brief(
+    bid: str, req: schemas.LaunchBriefRequest, ctx: UserContext = Depends(_ctx)
+):
+    """Freeze the brief into a new research session and start its first turn."""
+    key = (ctx.user.user_id, _safe_bid(bid))
+    if key in _LAUNCHING:
+        raise HTTPException(409, "this brief is already being launched")
+    _LAUNCHING.add(key)
+    try:
+        return await _launch_brief(bid, req, ctx)
+    finally:
+        _LAUNCHING.discard(key)
+
+
+async def _launch_brief(bid: str, req: schemas.LaunchBriefRequest, ctx: UserContext):
+    rec = _load_brief_or_404(ctx, bid)
+    if rec.get("status") == "launched" and rec.get("session_id"):
+        raise HTTPException(409, f"brief already launched as session {rec['session_id']}")
+    missing = _onboarding.missing_required(rec)
+    if missing:
+        raise HTTPException(422, {"missing": missing, "detail": "required fields are empty"})
+    problems = _resolve_brief_data(ctx, rec)
+    if problems:
+        raise HTTPException(422, {"data": problems, "detail": "attached data could not be resolved"})
+
+    # The working hypothesis is server-authoritative: re-read the linked search
+    # so a selection made on the Hypotheses page after the last sync still lands.
+    hid = rec.get("hypothesis_session_id")
+    if hid:
+        hyp_rec = read_json(_hyp_path(ctx, hid), None)
+        if isinstance(hyp_rec, dict):
+            card = _find_hyp_card(hyp_rec, hyp_rec.get("selected_id"))
+            if card:
+                rec["hypothesis"] = {
+                    "id": card.get("id"),
+                    "statement": card.get("statement", ""),
+                    "rationale": card.get("rationale", ""),
+                    "note": hyp_rec.get("select_note"),
+                }
+
+    sid = _new_session_id()
+    title = rec["title"].strip()
+    frozen = dict(rec)
+    frozen.update({"status": "launched", "session_id": sid, "launched": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
+    message = _onboarding.opening_message(frozen, ctx.library)
+    # The message is one argv element; Linux caps those at 128 KiB (E2BIG).
+    # Refuse before touching any state rather than half-creating a session.
+    size = len(message.encode("utf-8"))
+    if size > _onboarding.OPENING_MESSAGE_MAX_BYTES:
+        raise HTTPException(
+            422,
+            {
+                "detail": f"brief too large to hand to the agent ({size} bytes > {_onboarding.OPENING_MESSAGE_MAX_BYTES}); shorten the free-text fields or put long material in an attached file",
+                "size_bytes": size,
+                "max_bytes": _onboarding.OPENING_MESSAGE_MAX_BYTES,
+            },
+        )
+
+    _ensure_session_dirs(ctx, sid)
+    write_json(ctx.session_dir(sid) / _onboarding.BRIEF_FILENAME, frozen)
+
+    if req.autonomous:
+        _set_autonomous(ctx, sid)
+        _append_event(ctx, sid, actor="human", kind="session.autonomous")
+    # `task` is the short title so the session list stays readable; the full
+    # brief rides in the first-turn message and in the session.brief event.
+    _append_event(ctx, sid, actor="human", kind="research.requested", task=title, brief_id=rec["id"])
+    hyp = frozen.get("hypothesis") or None
+    _append_event(
+        ctx,
+        sid,
+        actor="human",
+        kind="session.brief",
+        brief_id=rec["id"],
+        title=title,
+        research_question=frozen.get("research_question", ""),
+        hypothesis=hyp.get("statement") if isinstance(hyp, dict) else None,
+        data=[d.get("path") for d in frozen.get("data") or []],
+        text=_onboarding.render_brief(frozen, ctx.library),
+    )
+    _clear_stop(ctx, sid)
+    try:
+        await _spawn_research(ctx, sid, message)
+    except Exception as e:
+        # Spawn failed (E2BIG, missing interpreter, ...): remove the half-made
+        # session so nothing orphaned shows up in the list, keep the brief a
+        # draft so the human can fix and retry, and say why.
+        shutil.rmtree(ctx.session_dir(sid), ignore_errors=True)
+        raise HTTPException(500, f"could not start the research runtime: {e}")
+
+    rec.update({"status": "launched", "session_id": sid})
+    _onboarding.save_brief(ctx.state, rec)
+    return schemas.LaunchBriefResponse(session_id=sid, task=title, brief_id=rec["id"])
 
 
 # ui3 is the default UI: serve the built SPA from the API origin so the

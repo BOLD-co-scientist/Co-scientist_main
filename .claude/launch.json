@@ -1,0 +1,15 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "ui3-mock",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev:mock", "--prefix", "ui3"],
+      "port": 5174
+    },
+    {
+      "name": "api-local",
+      "url": "http://127.0.0.1:8765"
+    }
+  ]
+}
