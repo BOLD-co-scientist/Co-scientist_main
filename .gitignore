@@ -4,6 +4,9 @@ __pycache__/
 .venv/
 .env
 .env.local
+docker-compose.override.yml
+CREDENTIALS.local.md
+*.local.md
 
 /state/
 worktrees/
@@ -15,3 +18,6 @@ researcher_data/
 .DS_Store
 
 tailscale-state
+# R17: per-user skills are durable cross-version assets (like memory/results),
+# not version-bound harness — keep them out of git so a checkout never swaps them.
+.claude/skills/

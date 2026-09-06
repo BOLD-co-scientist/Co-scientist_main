@@ -301,6 +301,14 @@ export function createMockApi(): Api {
       return delay({ session_id: id, task });
     },
 
+    forkSession: (sid) => {
+      const id = "s_" + rid().slice(0, 4);
+      const src = find(sid);
+      sessions.unshift({ session_id: id, task: src?.task ?? "(fork)", running: false, blocked: false, last_kind: "session.forked" });
+      events[id] = [...(events[sid] ?? [])];
+      return delay({ session_id: id, parent: sid });
+    },
+
     sendMessage: async (sid, text) => {
       const s = find(sid);
       if (!s) return { ok: false, status: 404, error: "Session not found." };
@@ -353,6 +361,8 @@ export function createMockApi(): Api {
     libraryHealth: () => delay({ used_bytes: 2_878_000_000, free_bytes: 442_000_000_000, max_bytes: 445_000_000_000 }),
 
     getPending: (sid) => delay(clone(pending[sid] ?? [])),
+    getReflection: (sid) => delay({ session_id: sid, reflection: "", proposals: [] }),
+    reflect: () => delay({ ok: true }),
     answerHitl: (sid, _req, decision) => {
       const s = find(sid);
       pending[sid] = [];
@@ -397,6 +407,8 @@ export function createMockApi(): Api {
         ],
       }),
     spawnEvolution: (command) => delay({ session_id: "evo-mock-1", command }),
+    versions: () => delay({ versions: [], active: null }),
+    activateVersion: (_id) => delay({ versions: [], active: null }),
 
     // ---- hypothesis engine (mock: canned parallel sets, deterministic) ----
     startHypothesis: (goal, n = 4) => mockStartHypothesis(goal, n),

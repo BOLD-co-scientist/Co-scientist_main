@@ -58,7 +58,10 @@ def make_tools(session_id: str):
           "are available). The working dir is a private scratch dir; researcher_data is mounted "
           "READ-ONLY at ./data — e.g. open('data/LTEMData/d_labeled.tsv') or "
           "pd.read_csv('data/LTEMData/PM1_WT_baseline.csv'). Write outputs to the cwd. "
-          "Returns stdout+stderr.", {
+          "Returns stdout+stderr. Always pass `intent`: a short one-line description of what "
+          "this snippet does (e.g. 'count mutations per lineage') — it labels the step in the "
+          "activity log; the code itself is not shown unless expanded.", {
+        "intent": str,
         "code": str,
     })
     async def run_(args: dict[str, Any]) -> dict:

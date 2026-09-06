@@ -18,7 +18,7 @@ import uuid
 import yaml
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
-from scaffold import sandbox, settings
+from scaffold import archive, contract, sandbox, settings
 from scaffold._atomic import append_jsonl, read_json, write_json
 
 from . import onboarding as _onboarding
@@ -197,6 +197,49 @@ def _monitor_key(ctx: UserContext, sid: str) -> tuple[str, str]:
     return (ctx.user.user_id, sid)
 
 
+def _research_active_dir(ctx: UserContext) -> Path:
+    # Cross-process signal (the evolution subprocess can't read _RUNNING): one
+    # marker file per running research session, holding its PID so the evolution
+    # merge guard can verify liveness and ignore stale markers from a crash.
+    return ctx.state / "control" / "research_active"
+
+
+def _mark_research_active(ctx: UserContext, sid: str, pid: int) -> None:
+    d = _research_active_dir(ctx)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / sid).write_text(str(pid), encoding="utf-8")
+
+
+def _clear_research_active(ctx: UserContext, sid: str) -> None:
+    (_research_active_dir(ctx) / sid).unlink(missing_ok=True)
+
+
+# ---- version-switch guard (R17) --------------------------------------------
+# Switching the active version is a git checkout of the tenant's agent-layer code
+# that per-turn subprocesses read. Two guarantees (see docs/plans/R17): (1) never
+# swap code while a turn runs — refuse if the tenant is busy; (2) block NEW spawns
+# for the duration of the checkout — a `switch_lock` marker the spawn paths honour,
+# so a turn can't start mid-checkout and read a half-updated tree. Long jobs (R12)
+# are async/independent and are deliberately NOT waited on.
+def _switch_lock_path(ctx: UserContext) -> Path:
+    return ctx.state / "control" / "switch_lock"
+
+
+def _is_switch_locked(ctx: UserContext) -> bool:
+    return _switch_lock_path(ctx).exists()
+
+
+def _tenant_busy(ctx: UserContext) -> bool:
+    """True if any research/evolution runtime subprocess is live for this tenant."""
+    uid = ctx.user.user_id
+    return any(key[0] == uid for key in _RUNNING)
+
+
+def _guard_not_switching(ctx: UserContext) -> None:
+    if _is_switch_locked(ctx):
+        raise HTTPException(409, "a version switch is in progress — retry in a moment")
+
+
 async def _monitor_runtime(
     ctx: UserContext, sid: str, proc: "asyncio.subprocess.Process", log_fh
 ) -> None:
@@ -205,6 +248,7 @@ async def _monitor_runtime(
         rc = await proc.wait()
     finally:
         _RUNNING.pop(_monitor_key(ctx, sid), None)
+        _clear_research_active(ctx, sid)
         _clear_stop(ctx, sid)
         try:
             log_fh.close()
@@ -218,6 +262,38 @@ async def _monitor_runtime(
             kind="session.crashed",
             error=f"runtime exited with code {rc}; see state/sessions/{sid}/runtime.log",
         )
+    elif not sid.startswith("evo-") and settings.EVO_REFLECT:
+        # R16: a research turn finished cleanly → kick the read-only reflection
+        # pass in its own detached subprocess so it never delays or blocks the
+        # turn, and stays a separate node from the (heavy) evolution modifier.
+        await _spawn_reflection(ctx, sid)
+
+
+async def _reap_reflection(proc: "asyncio.subprocess.Process", log_fh) -> None:
+    try:
+        await proc.wait()
+    finally:
+        try:
+            log_fh.close()
+        except Exception:
+            pass
+
+
+async def _spawn_reflection(ctx: UserContext, sid: str) -> None:
+    """Kick the R16 reflection runner (read-only) as a detached subprocess.
+    Advisory only — any failure here must never affect the research session."""
+    try:
+        log_fh = open(ctx.session_dir(sid) / "reflect.log", "ab")
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable, "-m", "research.reflect", "--session", sid,
+            cwd=str(ctx.root),
+            env=_runtime_env(ctx),
+            stdout=log_fh,
+            stderr=log_fh,
+        )
+        asyncio.create_task(_reap_reflection(proc, log_fh))
+    except Exception:
+        pass
 
 
 def _read_sdk_session(ctx: UserContext, sid: str) -> str | None:
@@ -268,6 +344,9 @@ async def _spawn_research(
         log_fh.close()
         raise
     _RUNNING[_monitor_key(ctx, sid)] = proc
+    # Research only: signals the evolution merge guard to wait. Evolution spawns
+    # deliberately do NOT mark, so a merge never waits on its own subprocess.
+    _mark_research_active(ctx, sid, proc.pid)
     asyncio.create_task(_monitor_runtime(ctx, sid, proc, log_fh))
 
 
@@ -310,6 +389,7 @@ def clear_agent_key(ctx: UserContext = Depends(_ctx)):
 
 @app.post("/research/sessions", response_model=schemas.StartResearchResponse)
 async def start_research(req: schemas.StartResearchRequest, ctx: UserContext = Depends(_ctx)):
+    _guard_not_switching(ctx)
     sid = _safe_sid(req.session_id or _new_session_id())
     _ensure_session_dirs(ctx, sid)
     if req.autonomous:
@@ -333,6 +413,27 @@ async def stop_session(sid: str, ctx: UserContext = Depends(_ctx)):
     return {"ok": True}
 
 
+@app.post("/sessions/{sid}/fork")
+def fork_session(sid: str, ctx: UserContext = Depends(_ctx)):
+    """R17: branch a session into a new one continuable on the CURRENT active
+    version. Copies the session dir and drops the schema stamp (re-stamped on the
+    next turn at the current version), so a read-only session — one created by a
+    newer version than the one now active — can be continued after a fork. The
+    original is left untouched (the read-only guard keeps it safe)."""
+    sid = _safe_sid(sid)
+    if not _session_exists(ctx, sid):
+        raise HTTPException(404, "unknown session")
+    new_sid = _safe_sid(_new_session_id())
+    src = ctx.session_dir(sid)
+    dst = ctx.session_dir(new_sid)
+    if dst.exists():
+        raise HTTPException(409, "fork target already exists")
+    shutil.copytree(src, dst)
+    (dst / "schema.json").unlink(missing_ok=True)
+    _append_event(ctx, new_sid, actor="system", kind="session.forked", parent=sid)
+    return {"session_id": new_sid, "parent": sid}
+
+
 @app.post("/research/sessions/{sid}/messages")
 async def post_human_directive(
     sid: str, body: schemas.HumanDirective, ctx: UserContext = Depends(_ctx)
@@ -344,6 +445,7 @@ async def post_human_directive(
     session is unknown; 409 if a turn is still running (Stop it or wait) or there
     is no resumable prior turn yet."""
     sid = _safe_sid(sid)
+    _guard_not_switching(ctx)
     if not _session_exists(ctx, sid):
         raise HTTPException(404, "unknown session")
     if _monitor_key(ctx, sid) in _RUNNING:
@@ -413,6 +515,11 @@ def list_sessions(ctx: UserContext = Depends(_ctx)):
         # it; surface the title + working hypothesis so the UI can anchor on them.
         brief = _read_session_brief(ctx, sd.name)
         hyp = brief.get("hypothesis") if brief else None
+        # R17: a session stamped by a newer schema than this version can read is
+        # read-only here (the runtime guard opens it read-only). Surface it so the
+        # UI can show a banner + offer fork-to-continue.
+        _schema = read_json(sd / "schema.json", default=None)
+        readonly = isinstance(_schema, dict) and int(_schema.get("schema_version", 1)) > contract.SCHEMA_VERSION
         out.append(
             schemas.SessionSummary(
                 session_id=sd.name,
@@ -424,6 +531,7 @@ def list_sessions(ctx: UserContext = Depends(_ctx)):
                 has_brief=brief is not None,
                 brief_title=(brief.get("title") or None) if brief else None,
                 hypothesis=(hyp.get("statement") or None) if isinstance(hyp, dict) else None,
+                readonly=readonly,
             )
         )
     return out
@@ -462,6 +570,34 @@ def session_events(sid: str, limit: int = 100, ctx: UserContext = Depends(_ctx))
     if limit < 1 or limit > 1000:
         raise HTTPException(400, "limit must be between 1 and 1000")
     return _tail_events(ctx, sid)[-limit:]
+
+
+@app.get("/sessions/{sid}/reflection")
+def session_reflection(sid: str, ctx: UserContext = Depends(_ctx)):
+    """R16: the per-session reflection + evolution proposals, if any. Powers the
+    research-conversation nudge card and the Evolution-tab suggestion cards.
+    Returns empty proposals when no reflection has run (or none was warranted)."""
+    sid = _safe_sid(sid)
+    if not _session_exists(ctx, sid):
+        raise HTTPException(404, "unknown session")
+    rec = read_json(ctx.session_dir(sid) / "reflection.json", default=None)
+    if not isinstance(rec, dict):
+        return {"reflection": "", "proposals": []}
+    return {"reflection": rec.get("reflection", ""), "proposals": rec.get("proposals") or []}
+
+
+@app.post("/sessions/{sid}/reflect")
+async def session_reflect(sid: str, ctx: UserContext = Depends(_ctx)):
+    """Re-run the R16 reflection pass on demand (e.g. the human wants suggestions
+    even though the auto pass was skipped). Fire-and-forget; poll the reflection
+    endpoint / watch for the ``reflection.ready`` event."""
+    sid = _safe_sid(sid)
+    if not _session_exists(ctx, sid):
+        raise HTTPException(404, "unknown session")
+    if sid.startswith("evo-"):
+        raise HTTPException(400, "reflection is for research sessions")
+    await _spawn_reflection(ctx, sid)
+    return {"ok": True, "queued": True}
 
 
 # Subdirs of a session that hold agent-generated, user-facing output.
@@ -888,6 +1024,44 @@ def git_history(limit: int = 200, ctx: UserContext = Depends(_ctx)):
         raise HTTPException(500, f"git history failed: {e}")
 
 
+@app.get("/versions")
+def list_versions(ctx: UserContext = Depends(_ctx)):
+    """R17: the tenant's evolution version DAG — every ``ver/<id>`` node (a
+    merged evolution, made switchable) joined with its archive metadata
+    (summary, rationale, owner, smoke, status), plus which node is currently
+    active (== HEAD). Read-only, tenant-scoped; safe on every UI refresh."""
+    return archive.list_versions(ctx.root)
+
+
+@app.post("/versions/{version_id}/activate")
+def activate_version(version_id: str, ctx: UserContext = Depends(_ctx)):
+    """R17: switch this tenant's active version — check out ``ver/<version_id>``
+    (or a bare commit sha, e.g. the bootstrap root) into the working tree.
+
+    Idle-guarded: refuses (409) if any research/evolution turn is running, and
+    holds a ``switch_lock`` for the duration so no new turn can spawn mid-checkout
+    and read a half-swapped tree. Long jobs (R12) are async/independent and are
+    NOT waited on. Returns the refreshed version DAG (with the new active node)."""
+    if not re.fullmatch(r"[0-9A-Za-z._][0-9A-Za-z._-]{0,119}", version_id or ""):
+        raise HTTPException(400, f"invalid version id: {version_id!r}")
+    # (1) block new spawns FIRST, then (2) verify nothing is in flight, then swap.
+    lock = _switch_lock_path(ctx)
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.write_text(version_id, encoding="utf-8")
+    try:
+        if _tenant_busy(ctx):
+            raise HTTPException(
+                409, "stop the running research/evolution turn before switching versions"
+            )
+        try:
+            archive.activate_version(ctx.root, version_id)
+        except archive.ArchiveError as e:
+            raise HTTPException(409, str(e))
+    finally:
+        lock.unlink(missing_ok=True)
+    return archive.list_versions(ctx.root)
+
+
 @app.get("/git/commit/{sha}")
 def git_commit(sha: str, ctx: UserContext = Depends(_ctx)):
     """What's *in* a commit of the researcher's own harness repo — metadata plus
@@ -928,6 +1102,7 @@ async def start_evolution(req: schemas.StartEvolutionRequest, ctx: UserContext =
     HEAD if omitted), attempts the change described by ``req.command``, and
     proposes a merge for human approval. Its ``evolution.*`` lifecycle streams
     into the returned session and the merge lands in the lineage graph."""
+    _guard_not_switching(ctx)
     command = (req.command or "").strip()
     if not command:
         raise HTTPException(400, "command must not be empty")

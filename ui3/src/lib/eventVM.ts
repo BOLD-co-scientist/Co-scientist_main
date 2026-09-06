@@ -1,6 +1,11 @@
 import type { Ev } from "./types";
 import { actorColor, actorGlyph, actorLabel, timeOf } from "./format";
 
+// A tool call's outcome (from a tool.result event), paired to its tool.use by
+// `ref`, plus whether the timeline is live (so a resultless call can pulse).
+export type ToolResult = { summary: string; full: string; isError: boolean };
+export type VMCtx = { results?: Map<string, ToolResult>; live?: boolean };
+
 // Maps a raw event record to a view model the timeline can render. This is the
 // trickiest, most reusable piece of the port — keep it pure and total so every
 // `kind` in the taxonomy (brief §4.D) renders something legible and no record
@@ -26,9 +31,12 @@ export type EventVM =
       actorColor: string;
       actorLabel: string;
       glyph: string;
-      tool: string;
-      summary: string; // one-line gist of the call (e.g. first line of a script)
-      arg: string;
+      verb: string; // Claude-Code-style action verb: Read / Run / Search / Task …
+      arg: string; // the key argument on one line (path, query, script intent)
+      full: string; // full input, revealed on expand
+      continuation: boolean; // prev row was the same tool+actor → render tighter
+      result?: ToolResult; // outcome, once its tool.result has arrived
+      running: boolean; // live + no result yet → pulse
     }
   | { variant: "dispatch"; id: string; time: string; actorColor: string; actorLabel: string; target: string; body: string }
   | { variant: "hitl"; id: string; time: string; title: string; body: string }
@@ -84,9 +92,57 @@ const humanize = (kind: string) => kind.replace(/[._]/g, " ");
 // SDK MCP tool names arrive as "mcp__<server>__<method>" (e.g.
 // "mcp__py_exec__run"). Show just the server ("py_exec"), which is the part a
 // human cares about; leave plain tool names (web_search, TodoWrite) untouched.
-function cleanTool(name: string): string {
+export function cleanTool(name: string): string {
   const m = /^mcp__([^_].*?)__[^_].*$/.exec(name);
   return m ? m[1] : name;
+}
+
+// Low-signal "system" events hidden from the default timeline (revealed with the
+// ⌘/Ctrl-O shortcut). These are SDK/harness bookkeeping or duplicates of a
+// richer row, NOT agent work. The spine keeps only true session state/boundary
+// markers (idle / end / start / crashed / interrupted, evolution + skill).
+const NOISE_KINDS = new Set([
+  "session.turn_result", // per-stream "[result success]" marker
+  "turn.start", // "new turn" — your own message already marks it
+  "bus.drain", // internal message-bus bookkeeping
+  "checkpoint.triggered", // the pending approval card already represents it
+  "reflection.ready", // R16: surfaced by the nudge card / evo suggestions, not the timeline
+  // deep_research lifecycle: the "Search · query" action row already represents
+  // the search; these bracket it with bare spine lines. Hidden as a unit (a
+  // start/complete pair must not be split, or the survivor is an orphan).
+  "deep_research.started",
+  "deep_research.completed",
+  "deep_research.fallback",
+  "deep_research.cancelled",
+]);
+
+export function isSystemNoise(e: Ev): boolean {
+  if (NOISE_KINDS.has(e.kind)) return true;
+  if (e.kind === "tool.use") {
+    // ToolSearch = deferred-schema loading; bus tool.use just duplicates the
+    // report bubble / dispatch row it produced.
+    const t = cleanTool(((e as Record<string, unknown>).tool as string) ?? "");
+    if (t === "ToolSearch" || t === "bus") return true;
+    // The deferred placeholder deferred at a checkpoint (renders "mcp__… · {}").
+    const raw = (((e as Record<string, unknown>).input_summary as string) ?? "").trim();
+    if (raw === "" || raw === "{}") return true;
+  }
+  return false;
+}
+
+// Drop the redundant `human_directive` echo of a `message.received`. The backend
+// logs a follow-up human message twice — `message.received` (immediately on POST)
+// then `human_directive` (when the turn subprocess starts) — with identical text;
+// both render as the same human bubble. This removes ONLY an exact-text duplicate
+// of the immediately-preceding `message.received`, so the interrupt-feedback
+// `human_directive` (which has no `message.received` twin) is preserved.
+export function dedupeHumanEcho(events: Ev[]): Ev[] {
+  const txt = (x: Ev) => ((x as Record<string, unknown>).text as string | undefined) ?? "";
+  return events.filter((e, i) => {
+    if (e.kind !== "human_directive") return true;
+    const p = events[i - 1];
+    return !(p && p.kind === "message.received" && txt(p) === txt(e));
+  });
 }
 
 function firstLine(text: string, max = 72): string {
@@ -99,30 +155,91 @@ function firstLine(text: string, max = 72): string {
   return s.length > max ? s.slice(0, max - 1) + "…" : s;
 }
 
-// Turn the runtime's `input_summary` (usually JSON of the tool input) into a
-// one-line gist for the collapsed row and a readable body for the expanded view.
-// The point: many back-to-back py_exec runs should show WHAT ran, not N
-// identical "used py_exec" rows.
-function describeToolInput(raw: string): { gist: string; full: string } {
-  if (!raw.trim()) return { gist: "", full: "" };
-  try {
-    const v = JSON.parse(raw);
-    if (v && typeof v === "object" && !Array.isArray(v)) {
-      // py_exec and friends carry the script under `code`; show it directly.
-      if (typeof v.code === "string") return { gist: firstLine(v.code), full: v.code };
-      // Otherwise summarise the first string-valued field (path, query, …).
-      const entries = Object.entries(v as Record<string, unknown>);
-      const strEntry = entries.find(([, val]) => typeof val === "string" && (val as string).trim());
-      if (strEntry) return { gist: firstLine(String(strEntry[1])), full: JSON.stringify(v, null, 2) };
-      return { gist: firstLine(JSON.stringify(v)), full: JSON.stringify(v, null, 2) };
+function trunc(s: string, max: number): string {
+  const t = s.replace(/\s+/g, " ").trim();
+  return t.length > max ? t.slice(0, max - 1) + "…" : t;
+}
+
+// A meaningful one-liner for a python snippet, à la Claude Code showing intent
+// rather than boilerplate: prefer a leading intent comment (`# compute X`), else
+// the first statement that isn't an import/comment/blank. Fixes the "every row
+// says `import pandas as pd`" complaint.
+function pySummary(code: string, max = 72): string {
+  const lines = code.split("\n").map((l) => l.trim());
+  const firstNonBlank = lines.find((l) => l.length > 0) ?? "";
+  if (firstNonBlank.startsWith("#")) return trunc(firstNonBlank.replace(/^#+\s*/, ""), max);
+  const stmt = lines.find(
+    (l) => l.length > 0 && !l.startsWith("#") && !/^(import|from)\b/.test(l),
+  );
+  return trunc(stmt || firstNonBlank, max);
+}
+
+// Map a tool call to a compact { verb, arg } — Claude Code's Read(path) /
+// Bash(cmd) / Task(agent) shape. Tools we share with CC get CC's verbs; our own
+// tools (memory, deep_research, latex_compile, the bus) get the same visual
+// language so the timeline reads as one system. `full` is the raw input for the
+// expand view.
+function describeTool(toolName: string, raw: string): { verb: string; arg: string; full: string } {
+  const clean = cleanTool(toolName);
+  let input: Record<string, unknown> | null = null;
+  let full = raw;
+  if (raw.trim()) {
+    try {
+      const v = JSON.parse(raw);
+      if (v && typeof v === "object" && !Array.isArray(v)) {
+        input = v as Record<string, unknown>;
+        full = JSON.stringify(v, null, 2);
+      } else {
+        full = String(v);
+      }
+    } catch {
+      /* raw stays */
     }
-    return { gist: firstLine(String(v)), full: raw };
-  } catch {
-    return { gist: firstLine(raw), full: raw };
+  }
+  const S = (k: string): string => {
+    const v = input?.[k];
+    return typeof v === "string" ? v : "";
+  };
+  const firstStrField = (): string => {
+    if (!input) return firstLine(raw);
+    const e = Object.entries(input).find(([, v]) => typeof v === "string" && (v as string).trim());
+    return e ? firstLine(String(e[1])) : firstLine(JSON.stringify(input));
+  };
+
+  switch (clean) {
+    case "fs_read":
+      return { verb: "Read", arg: S("path") || S("file") || firstStrField(), full };
+    case "fs_write_workspace":
+      return { verb: "Write", arg: S("path") || S("file") || firstStrField(), full };
+    case "py_exec":
+      // Prefer the agent-authored intent (semantic, like CC's Bash description);
+      // fall back to a heuristic summary of the code.
+      return { verb: "Run", arg: S("intent") || pySummary(S("code") || raw), full: S("code") || full };
+    case "memory":
+      return { verb: "Memory", arg: firstLine(S("query") || S("text") || S("key")) || firstStrField(), full };
+    case "deep_research":
+    case "web_search":
+      return { verb: "Search", arg: firstLine(S("query")) || firstStrField(), full };
+    case "latex_compile":
+      return { verb: "Compile", arg: S("path") || S("file") || firstStrField(), full };
+    case "Task":
+      return {
+        verb: "Task",
+        arg:
+          [S("subagent_type"), firstLine(S("description") || S("prompt"))]
+            .filter(Boolean)
+            .join(" · ") || firstStrField(),
+        full,
+      };
+    default:
+      // Built-in tools (Read/Edit/Write/Bash…) we can't add an intent to, but
+      // several (Bash, Task) carry a native `description` — prefer it, else the
+      // first meaningful field (usually a path).
+      return { verb: clean, arg: firstLine(S("description")) || firstStrField(), full };
   }
 }
 
-export function toVM(e: Ev, prev?: Ev): EventVM {
+export function toVM(e: Ev, prev?: Ev, ctx?: VMCtx): EventVM {
   const time = timeOf(e.ts);
   const showActor = !prev || prev.actor !== e.actor;
   const s = (k: string) => (e as Record<string, unknown>)[k] as string | undefined;
@@ -149,7 +266,18 @@ export function toVM(e: Ev, prev?: Ev): EventVM {
   if (e.kind === "tool.use" || e.kind === "tool.missing") {
     const rawTool = s("tool") ?? "tool";
     const raw = firstStr("input_summary", "arg", "error", "detail") ?? "";
-    const { gist, full } = describeToolInput(raw);
+    const { verb, arg, full } = describeTool(rawTool, raw);
+    // A run of same-tool, same-actor calls renders as a tighter block (no
+    // repeated glyph) so consecutive steps read as one action group.
+    const continuation =
+      !!prev &&
+      prev.kind === e.kind &&
+      prev.actor === e.actor &&
+      cleanTool((prev as Record<string, unknown>).tool as string ?? "") === cleanTool(rawTool);
+    const ref = s("ref");
+    const result = ref ? ctx?.results?.get(ref) : undefined;
+    // Still-running iff the timeline is live and no tool.result has landed yet.
+    const running = e.kind === "tool.use" && !result && !!ctx?.live;
     return {
       variant: "tool",
       id: e.id,
@@ -157,11 +285,12 @@ export function toVM(e: Ev, prev?: Ev): EventVM {
       actorColor: e.kind === "tool.missing" ? "var(--err)" : actorColor(e.actor),
       actorLabel: actorLabel(e.actor),
       glyph: actorGlyph(e.actor),
-      tool: cleanTool(rawTool) + (e.kind === "tool.missing" ? " (missing)" : ""),
-      // A quick gist so back-to-back calls to the same tool (e.g. many py_exec
-      // runs) are distinguishable at a glance instead of N identical rows.
-      summary: gist,
-      arg: full,
+      verb: verb + (e.kind === "tool.missing" ? " (missing)" : ""),
+      arg,
+      full,
+      continuation,
+      result,
+      running,
     };
   }
 
@@ -197,14 +326,21 @@ export function toVM(e: Ev, prev?: Ev): EventVM {
     };
   }
 
-  if (e.kind === "hitl.pending" || e.kind === "ask")
+  if (e.kind === "hitl.pending" || e.kind === "ask") {
+    // hitl.pending events carry the request `summary` (the actual question /
+    // what's being approved) — show it here instead of a generic placeholder so
+    // the timeline says WHAT is pending, not just that something is.
+    const q = firstStr("summary", "text", "detail");
     return {
       variant: "hitl",
       id: e.id,
       time,
-      title: "The agent is waiting for your approval.",
-      body: "A gated action is pending — see the approval panel on the right.",
+      title: q ?? "The agent is waiting for your approval.",
+      body: q
+        ? "Approve or reject in the approval panel on the right."
+        : "A gated action is pending — see the approval panel on the right.",
     };
+  }
 
   if (e.kind === "hitl.answer") {
     const decision = s("decision");
@@ -254,6 +390,10 @@ export function toVM(e: Ev, prev?: Ev): EventVM {
   // agent received.
   if (e.kind === "session.brief")
     return { ...base, label: "Problem brief", body: firstStr("text") ?? s("title") ?? "" };
+  // The human's evolution command — echo it as their message bubble so the
+  // conversation opens with what was asked, not a bare spine line.
+  if (e.kind === "evolution.requested")
+    return { ...base, tone: "human", label: "Evolution command", body: s("command") ?? "" };
   if (e.kind === "research.complete")
     return { ...base, tone: "ok", label: "Research complete", body: firstStr("summary", "text") ?? "" };
 

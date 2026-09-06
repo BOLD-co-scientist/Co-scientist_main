@@ -1,0 +1,20 @@
+{
+  "_comment": "Frozen golden sample of R17 durable schemas as written by SCHEMA_VERSION=1. tests/test_contract_compat.py reconstructs a tenant dir from this and runs the REAL readers against it. A future version that can no longer read these shapes fails the compat gate (wired into propose_merge smoke) and is auto-rejected. Do NOT edit to make a test pass — that defeats the purpose; add fields additively instead.",
+  "schema_version": 1,
+  "events": [
+    {"id": "aa11bb22cc33", "ts": "2026-01-01 00:00:00", "session": "sess_v1", "actor": "system", "kind": "session.start", "task": "seed task"},
+    {"id": "aa11bb22cc34", "ts": "2026-01-01 00:00:01", "session": "sess_v1", "actor": "supervisor", "kind": "tool.use", "tool": "mcp__fs_read", "ref": "t1", "input_summary": "{\"path\":\"data/x.csv\"}"},
+    {"id": "aa11bb22cc35", "ts": "2026-01-01 00:00:02", "session": "sess_v1", "actor": "supervisor", "kind": "bus.send", "target": "human", "msg_kind": "report", "payload": {"text": "done"}},
+    {"id": "aa11bb22cc36", "ts": "2026-01-01 00:00:03", "session": "sess_v1", "actor": "system", "kind": "session.idle"}
+  ],
+  "sdk_session": {"sdk_session_id": "11111111-2222-3333-4444-555555555555", "turns": 2, "updated": 1767225600.0},
+  "memory_agent": [
+    {"id": "mem0agent01", "ts": "2026-01-01 00:00:04", "agent": "supervisor", "text": "the CSV has 21 rows", "tags": {"kind": "fact"}}
+  ],
+  "memory_global": [
+    {"id": "mem0global1", "ts": "2026-01-01 00:00:05", "source": "sess_v1/supervisor", "text": "log-linear OLS fits exponential growth well", "tags": {"lesson": true}}
+  ],
+  "hitl_answered": {"id": "hitlreq0001", "ts": "2026-01-01 00:00:06", "kind": "checkpoint", "summary": "checkpoint (10 events)", "payload": {"event_count": 10}, "decision": "approve", "decided_at": "2026-01-01 00:00:07", "note": ""},
+  "archive_meta": {"id": "20260101-000000__seed", "tag": "ver/20260101-000000__seed", "sha": "0000000000000000000000000000000000000000", "base_sha": "", "summary": "seed version", "rationale": "", "owner": "u_golden", "schema_version": 1, "smoke": {"ran": false}, "status": "merged", "created_at": 1767225600.0, "archive_dir": "20260101-000000__seed", "diff": "diff.patch"},
+  "archive_index": {"schema_version": 1, "versions": [{"id": "20260101-000000__seed", "tag": "ver/20260101-000000__seed", "sha": "0000000000000000000000000000000000000000", "base_sha": "", "summary": "seed version", "owner": "u_golden", "status": "merged", "created_at": 1767225600.0, "archive_dir": "20260101-000000__seed"}]}
+}

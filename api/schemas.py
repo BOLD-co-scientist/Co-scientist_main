@@ -46,6 +46,9 @@ class SessionSummary(BaseModel):
     has_brief: bool = False
     brief_title: str | None = None
     hypothesis: str | None = None
+    # R17: True when the session was stamped by a NEWER schema than the active
+    # version can read — it opens read-only and must be forked to continue.
+    readonly: bool = False
 
 
 class HumanDirective(BaseModel):
