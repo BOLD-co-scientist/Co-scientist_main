@@ -108,6 +108,10 @@ Visibility: any authenticated user sees every `org` node's statement, owner
 name, status, edges and link summaries (session ids + outcome one-liners,
 version ids + summaries, tool names). Nobody sees another tenant's files,
 events, memory, hypotheses or HITL records. Private nodes are owner-only.
+A harness version is discoverable (and importable) only if it is linked to a
+non-private launched problem, or its owner shared it explicitly
+(`POST /versions/{id}/share`, an additive `shared` key on `meta.json`), so a
+researcher's whole evolution history is not exposed because one problem is.
 
 ## The background advisor
 
@@ -145,8 +149,13 @@ suggested_keywords[]}`, `hypothesis_seed {suggested, why}`. Events:
 wizard polls `GET /projects/{pid}/recommendations` every 3 s while running.
 
 Failure: refusal/error → Opus; both fail → `failed` with a Retry button and the
-keyword edges still shown; empty tree → `skipped`, no model call. Cost ≈
-$0.10–0.30 per run; manual re-runs are human-initiated.
+keyword edges still shown; empty tree → `skipped`, no model call. Unknown ids
+returned by the model are dropped and listed in `validation_notes`. Cost ≈
+$0.10–0.30 per run, recorded as `usage` (input/output tokens) on the record so
+R5's ledger can sum it; daily caps per user and global (counted from the
+records, env-configurable) are the spend backstop; manual re-runs are
+human-initiated. Stale pre-gate worktrees (`worktrees/import-*` left by an API
+crash) are pruned on the next import.
 
 ## Imports (on top of R17)
 
@@ -175,18 +184,25 @@ Harness import, two modes (advisor gives `mode_hint`, human chooses):
 Gate: the API opens the request itself in a dedicated `evo-import-<id>` session
 using the `scaffold/hitl.py` file protocol (`kind: harness_import`, payload:
 source, mode, summary, rationale, smoke result, diffstat, bounded diff preview,
-what happens, rollback target), so it appears in the existing approval panel and
+`risks[]` computed deterministically by the API (tools and roles present in the
+importer's tree but absent at the donor sha, e.g. `latex_compile` on a pre-R13
+donor), donor skills with `include_skills`, what happens, rollback target), so it appears in the existing approval panel and
 is answered through `POST /hitl/{sid}/{rid}/answer`; that route gains one hook
 that applies or rejects. A pre-gate smoke in a temporary worktree runs *before*
 the human is asked (the R17 rule). Autonomous mode cannot answer it (no runtime
 owns that session; the kinds are excluded).
 
-Tool import: an evolution command against the fetched ref (`git checkout <sha>
--- tools/<name>`, add the tool to the chosen roles' YAML, keep everything else,
-run tests, `propose_merge`), spawned through the existing evolution runtime,
-gated by `evolution_merge`, recorded as a child version node. Rollback = switch
-to the parent. A deterministic API-side path is the fallback if the agent proves
-unreliable.
+Tool import: deterministic and API-side (no agent run, no model spend). The
+API creates a worktree off the importer's HEAD, runs `git checkout <sha> --
+tools/<name>` from the fetched ref, inserts `- <name>` into the chosen roles'
+YAML `tools:` lists, commits, runs the smoke + compat tests in the worktree,
+opens the HITL request (`kind: tool_import`, same file protocol), and on
+approve fast-forwards and records a child version via
+`record_merged_version(imported_from=…)`. Verified during design: a subset
+checkout plus `--ff-only` merge works on a detached HEAD. Rollback = switch to
+the parent. Only when the smoke fails (the tool needs scaffold deltas from the
+donor) does the API fall back to an authored evolution command through the
+existing evolution runtime and `evolution_merge` gate.
 
 ## The onboarding page
 
@@ -278,9 +294,9 @@ a session exists (a slim card, like R16's nudge).
 - Verify: curl, no model spend: B imports A's version → pending in `/hitl/evo-import-…/pending` with smoke ok → approve → `/versions` (B) active = imported node; `git log --all` shows two roots; switch back restores HEAD.
 
 ### Phase 5 — Tool import
-- [ ] 17. Command composer + source verification (`git ls-tree`), spawn via `_spawn_evolution` with `source_import`; ledger transitions from the evo session's events.
-- [ ] 18. UI: checkboxes → editable command → Run → the evolution drawer + `evolution_merge` card; "Imported tools" list.
-- Verify (live, ≈$1–3): one evolution run imports one tool; `evolution_merge` diff touches only `tools/<name>/` and one role YAML; approve → child version; `GET /roles` lists the tool.
+- [ ] 17. `api/imports.py::import_tools()`: source verification (`git ls-tree`), worktree off HEAD, subset checkout, role-YAML insert, commit, smoke + compat, HITL request (`kind: tool_import`), approve → ff-merge + `record_merged_version(imported_from=…)`; evolution-command fallback when the smoke fails.
+- [ ] 18. UI: checkboxes → approval card (diffstat limited to `tools/<name>/` + role YAMLs, smoke result) → "Imported tools" list.
+- Verify (no model spend): B imports one of A's tools → pending request has smoke ok and a diff touching only `tools/<name>/` and one role YAML → approve → child version; `GET /roles` lists the tool; the fallback path is exercised once live (≈$1–3) with a tool that needs a scaffold delta.
 
 ### Phase 6 — Page assembly, docs, end-to-end
 - [ ] 19. Five-step wizard wired; Review shows harness + tree context; launch gated while an import approval is pending.
@@ -317,13 +333,18 @@ Model spend for the full pass stays under $5.
 ## Notes
 
 - 2026-09-06 — Design pass: three independent designs (minimal plumbing;
-  tree-first; advisor-first) were produced and scored by independent judges.
-  The minimal-plumbing design won on codebase fit and simplicity; grafts taken
+  tree-first; advisor-first) were produced and scored by three independent
+  judges (totals 101 / 81 / 94). The minimal-plumbing design won on codebase
+  fit and simplicity; grafts taken
   from the others: a real HITL pending record in an API-created `evo-import-*`
   session (not a parallel decide route), a pre-R17-tolerant archive reader,
   the advisor kicked on leaving step 1 with a status pill on every step,
   statement review keyed to the five question numbers plus `snapshot.json`,
-  `include_skills` on harness import, the completion sync hook. Rejected as too
+  `include_skills` on harness import, the completion sync hook, a
+  deterministic API-side tool import with the evolution command as fallback,
+  the version discoverability rule, deterministic `risks[]`, daily advisor caps
+  with `usage` on the record, `validation_notes`, and the correction that the
+  lineage canvas already lays out multiple roots. Rejected as too
   heavy for now: a durable advisor job store with dead-PID resume and daily
   caps (the lock + hash dedupe cover today's scale), a `harness_merge` patch
   mode as the default (merge is offered, adopt is the default for fresh roots).
@@ -341,8 +362,9 @@ Model spend for the full pass stays under $5.
   lacks `latex_compile`); the smoke + compat gate proves it can read old state,
   not feature parity. The advisor's `risks[]` and the approval card list what
   the version lacks (diff of `tools/` and `roles/` against the importer).
-- Two roots in the importer's git DAG after adopt; the tidy-tree layout needs a
-  forest mode and an "imported from" label.
+- Two roots in the importer's git DAG after adopt. The lineage canvas already
+  lays out multiple roots; only an "imported from <owner>" root label and node
+  badge are needed.
 - Skills are gitignored durable assets, so an adopted harness arrives without
   the donor's skills (R17's parked concern); surfaced in the card.
 - BM25 over a handful of short statements is noisy; the advisor and human
