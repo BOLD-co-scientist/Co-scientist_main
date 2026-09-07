@@ -67,9 +67,17 @@ def is_autonomous(session_id: str) -> bool:
     return _autonomous_flag(session_id).exists()
 
 
-# Gates that must never be auto-answered, even in autonomous mode:
-# evolution merges keep the human as the final gate on self-modification, and
-# interrupt feedback only exists because a human pressed Stop.
+# Gates that must never be auto-answered by the RUNTIME, even in autonomous mode:
+# evolution merges keep a gate on self-modification, and interrupt feedback only
+# exists because a human pressed Stop.
+#
+# R19 boundary, stated precisely because it is easy to misread: nothing here
+# changed. The agent's own runtime still cannot answer its merge gate. What R19
+# adds is separate — in *automatic* mode the PLATFORM (api/, which the agent
+# cannot edit) may answer an ``evolution_merge`` on the researcher's behalf after
+# an independent judge on another provider reviews it, and never for a
+# strict-path change (scaffold/, evolution/, pyproject.toml, Dockerfile), which
+# always goes to the human. Those answers are logged with ``actor="judge"``.
 _NEVER_AUTO_KINDS = frozenset({"evolution_merge", "interrupt_feedback"})
 
 AUTONOMOUS_ANSWER_NOTE = (

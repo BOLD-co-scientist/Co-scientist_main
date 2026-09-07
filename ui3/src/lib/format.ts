@@ -8,6 +8,7 @@ const ACTOR_COLORS: Record<string, string> = {
   generalist_researcher: "var(--lav)",
   system: "var(--lo)",
   evolution: "var(--evo)",
+  judge: "var(--warn)",
 };
 const ACTOR_GLYPHS: Record<string, string> = {
   human: "U",
@@ -16,11 +17,12 @@ const ACTOR_GLYPHS: Record<string, string> = {
   generalist_researcher: "GR",
   system: "\u2022\u2022",
   evolution: "EV",
+  judge: "JD",
 };
 
 export const actorColor = (a: string): string => ACTOR_COLORS[a] ?? "var(--mid)";
 export const actorGlyph = (a: string): string => ACTOR_GLYPHS[a] ?? "?";
-export const actorLabel = (a: string): string => (a === "human" ? "You" : a);
+export const actorLabel = (a: string): string => (a === "human" ? "You" : a === "judge" ? "Judge" : a);
 
 // ---- files ----
 export function fmtSize(b: number): string {

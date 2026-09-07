@@ -14,6 +14,8 @@ from scaffold import archive, eventlog, hitl, sandbox, settings
 from scaffold._atomic import write_json
 
 
+_DIFF_PREVIEW = 8000
+
 _STRICT_TRIGGERS = ("scaffold/", "evolution/", "pyproject.toml", "Dockerfile", "docker-compose.yml")
 
 
@@ -130,6 +132,10 @@ def make_server(session_id: str, wt: sandbox.Worktree):
             session_id, actor="evolution", kind="evolution.proposal",
             ref=str(archive_dir.name), strict=strict,
         )
+        # R19: will approving this ACTIVATE the change, or only record a sibling
+        # version? Decided before the human is asked so the approval card can say
+        # so (re-checked after approval, since HEAD may move while they think).
+        sibling_expected = not sandbox.can_fast_forward(wt)
 
         smoke_info: dict = {"ran": False}
         if strict:
@@ -148,15 +154,28 @@ def make_server(session_id: str, wt: sandbox.Worktree):
             payload={
                 "archive": str(archive_dir),
                 "branch": wt.branch,
-                "diff_preview": diff[:8000],
+                "diff_preview": diff[:_DIFF_PREVIEW],
+                # R19: the gate-2 judge and the approval card read these. Before,
+                # `summary` and `smoke` were absent, so the judge was always told
+                # "smoke not required for this path" — even for a strict change
+                # whose smoke had just run.
+                "summary": summary,
+                "smoke": smoke_info,
                 "strict": strict,
                 "rationale": rationale,
+                "diff_bytes": len(diff),
+                "diff_truncated": len(diff) > _DIFF_PREVIEW,
+                "sibling_expected": sibling_expected,
             },
         )
 
         if decision.get("decision") == "approve":
             # Guard: never merge into the user root while a research session runs.
-            if not await _wait_for_sessions_idle(session_id):
+            # A SIBLING only tags a commit — it swaps no running code — so it is
+            # deliberately not held behind the idle wait (which exists to stop
+            # code changing under a live turn).
+            will_fast_forward = sandbox.can_fast_forward(wt)
+            if will_fast_forward and not await _wait_for_sessions_idle(session_id):
                 write_json(archive_dir / "decision.json", {"status": "deferred", "reason": "sessions_running"})
                 eventlog.append(
                     session_id, actor="evolution", kind="evolution.note",
@@ -167,13 +186,29 @@ def make_server(session_id: str, wt: sandbox.Worktree):
                     "DEFERRED: research session(s) still running; merge NOT applied. "
                     "Stop them, then re-run this evolution. Your worktree is preserved."
                 )}], "isError": True}
-            head = sandbox.merge_to_main(wt)
+            # R19 "explore both": if the active tree has moved off this branch's
+            # base (a sibling merged first), the change cannot fast-forward. Keep
+            # it as a SIBLING version node — tag its tip, leave HEAD where it is —
+            # so the human can compare both and activate one. Decided by
+            # ``can_fast_forward`` (git merge-base), NOT by sniffing an error
+            # message: every GitError embeds the argv, so a substring test on
+            # "ff-only" matched every failure and silently reported dirty-tree and
+            # conflict failures as merged siblings.
+            sibling = not will_fast_forward
+            if sibling:
+                head = sandbox.branch_tip(wt)
+                eventlog.append(
+                    session_id, actor="evolution", kind="evolution.note",
+                    note="HEAD has moved since this branch was cut (a sibling merged first); recording this change as a sibling version node instead of fast-forwarding. Activate it from the version tree to run on it.",
+                )
+            else:
+                head = sandbox.merge_to_main(wt)
             # Compute revert.patch (reverse diff) for rollback.
             revert = subprocess.check_output(
                 ["git", "diff", head, wt.base], cwd=str(settings.ROOT), text=True
             )
             (archive_dir / "revert.patch").write_text(revert, encoding="utf-8")
-            write_json(archive_dir / "decision.json", {"status": "merged", "head": head})
+            write_json(archive_dir / "decision.json", {"status": "merged", "head": head, "sibling": sibling})
             # R17: promote the merged evolution to a first-class version node —
             # tag ver/<id> + archive manifest — so it becomes switchable. Never
             # fatal: the merge already landed; a manifest hiccup must not fail it.
@@ -182,14 +217,34 @@ def make_server(session_id: str, wt: sandbox.Worktree):
                     settings.ROOT, archive_dir=archive_dir, head_sha=head,
                     base_sha=wt.base, summary=summary, rationale=rationale,
                     owner=archive.owner_of(settings.ROOT), smoke=smoke_info,
-                    origin_session=session_id,
+                    origin_session=session_id, extra={"sibling": sibling},
                 )
                 eventlog.append(session_id, actor="evolution", kind="version.recorded",
                                 ref=str(archive_dir.name), version=node["id"], tag=node["tag"])
             except Exception as e:
                 eventlog.append(session_id, actor="evolution", kind="version.record_error", error=str(e))
-            sandbox.remove_after_merge(wt)
-            eventlog.append(session_id, actor="evolution", kind="evolution.merged", ref=str(archive_dir.name))
+            # A sibling's commit is reachable ONLY through its ver/ tag (HEAD did
+            # not move), and record_merged_version swallows tag failures — so keep
+            # the branch when the tag is missing rather than orphaning the work.
+            tag_ok = True
+            if sibling:
+                try:
+                    tag_ok = sandbox.tag_exists(f"ver/{archive_dir.name}")
+                except Exception:  # noqa: BLE001
+                    tag_ok = False
+            if tag_ok:
+                sandbox.remove_after_merge(wt)
+            else:
+                eventlog.append(
+                    session_id, actor="evolution", kind="evolution.note",
+                    note=f"Sibling version {archive_dir.name} could not be tagged; keeping branch {wt.branch} so the commit is not lost.",
+                )
+            eventlog.append(session_id, actor="evolution", kind="evolution.merged", ref=str(archive_dir.name), sibling=sibling)
+            if sibling:
+                return {"content": [{"type": "text", "text": (
+                    f"RECORDED as sibling version {archive_dir.name} (approved, tagged, NOT active: a sibling "
+                    "merged first). The human can activate it from the version tree."
+                )}]}
             return {"content": [{"type": "text", "text": f"MERGED as version {archive_dir.name}. Restart sessions to pick up changes."}]}
         else:
             decision_kind = decision.get("decision", "reject")

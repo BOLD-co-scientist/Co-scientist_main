@@ -121,7 +121,21 @@ def main() -> None:
     p.add_argument("--session", required=True)
     p.add_argument("--command", required=True)
     p.add_argument("--base", default=None, help="commit sha/ref to branch the worktree from")
+    # R19: the API passes --scope for platform-scope evolutions (editing the
+    # shared ui3/ + api/ instead of this tenant's harness). Accepted here so the
+    # flag can never crash the process on argparse; the staging build + tested
+    # cutover it requires are R19 Phase 4 and are NOT implemented, so a platform
+    # launch refuses loudly instead of half-running against the wrong repo.
+    p.add_argument("--scope", default="harness", choices=("harness", "platform"))
     args = p.parse_args()
+    if args.scope == "platform":
+        eventlog.append(
+            args.session, actor=EVOLUTION_AGENT_ID, kind="evolution.error",
+            error=("Platform-scope evolution (editing the shared UI/API) is not implemented yet: it "
+                   "needs the staging gate and the host-side cutover from R19 Phase 4. Set "
+                   "COSCIENTIST_PLATFORM_EVOLUTION=0 (the default) — the API refuses these with 501."),
+        )
+        raise SystemExit(2)
     asyncio.run(run_command(args.session, args.command, base=args.base))
 
 

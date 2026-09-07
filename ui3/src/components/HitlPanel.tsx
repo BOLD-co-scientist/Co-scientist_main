@@ -58,6 +58,22 @@ export default function HitlPanel({ pending: pendingProp, answer: answerProp }: 
                 </div>
               )
             )}
+            {p.judge && p.judge.verdict !== "unavailable" && (
+              <div style={{ marginTop: 10, padding: "9px 11px", borderRadius: 8, border: `1px solid ${p.judge.verdict === "approve" ? "var(--ok)" : "var(--err)"}`, background: "var(--bg2)" }}>
+                <div style={{ fontSize: 10.5, fontWeight: 700, color: p.judge.verdict === "approve" ? "var(--ok)" : "var(--err)", textTransform: "uppercase", letterSpacing: ".06em" }}>
+                  Judge · {p.judge.verdict} · {Math.round((p.judge.score ?? 0) * 100)}%{p.judge.served_by ? ` · ${p.judge.served_by}` : ""}
+                </div>
+                {p.judge.recommendation && <div style={{ marginTop: 4, fontSize: 12.5, color: "var(--hi)", fontWeight: 600 }}>{p.judge.recommendation}</div>}
+                {p.judge.why && <div style={{ marginTop: 3, fontSize: 12, color: "var(--mid)", lineHeight: 1.5 }}>{p.judge.why}</div>}
+                {p.judge.risks?.length > 0 && <div style={{ marginTop: 4, fontSize: 11, color: "var(--lo)" }}>Risks: {p.judge.risks.join("; ")}</div>}
+                {p.judge.mode === "automatic" && (
+                  <div style={{ marginTop: 4, fontSize: 11, color: "var(--lo)" }}>
+                    Automatic mode reviewed this and left the decision to you — either because it touches the
+                    gate machinery (a stricter human gate) or because it has been sent back for changes already.
+                  </div>
+                )}
+              </div>
+            )}
             <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 7 }}>
               <span style={{ fontFamily: "var(--mono)", fontSize: 10, color: "var(--lo)" }}>requested by</span>
               <span style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--cyan)" }}>{p.requester}</span>
