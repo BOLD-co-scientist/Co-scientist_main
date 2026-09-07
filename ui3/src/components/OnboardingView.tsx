@@ -198,6 +198,7 @@ export default function OnboardingView() {
   briefRef.current = brief;
   const creating = useRef<Promise<BriefRecord> | null>(null);
   const timer = useRef<number | null>(null);
+  const discardGen = useRef(0); // bumped when the open draft is discarded or switched
 
   const ensureBrief = useCallback(async (): Promise<BriefRecord> => {
     if (briefRef.current) return briefRef.current;
@@ -215,14 +216,19 @@ export default function OnboardingView() {
     // creating an empty draft here would litter the "Resume a draft" list.
     if (!briefRef.current && !creating.current) { setSave("idle"); return null; }
     setSave("saving");
+    const gen = discardGen.current;
     try {
       const b = await ensureBrief();
       const updated = await api.updateBrief(b.id, fieldsRef.current);
+      // The draft was discarded / switched while this save was in flight:
+      // don't resurrect it in the UI.
+      if (discardGen.current !== gen) return null;
       setBrief(updated);
       briefRef.current = updated;
       setSave("saved");
       return updated;
     } catch (e) {
+      if (discardGen.current !== gen) return null;
       setSave("error");
       setError(e instanceof HttpError ? e.message : "Could not save the brief.");
       return null;
@@ -335,11 +341,13 @@ export default function OnboardingView() {
   const resume = async (d: BriefSummary) => {
     await flush();
     cancelSave();
+    discardGen.current += 1;
     setStep(0); setBrief(null); briefRef.current = null; setFields(EMPTY); setHypSession(null); setPreview(null); setSave("idle");
     setOnboardingBriefId(d.id);
   };
   const fresh = () => {
     cancelSave();
+    discardGen.current += 1;
     setStep(0); setBrief(null); briefRef.current = null; setFields(EMPTY); setHypSession(null); setPreview(null); setSave("idle");
     setOnboardingBriefId(null);
   };
@@ -394,7 +402,7 @@ export default function OnboardingView() {
   const canLaunch = !launching && !!preview && preview.missing.length === 0 && preview.data_problems.length === 0 && !preview.too_large;
   const qdots = dots(fields);
   const answered = qdots.filter((d) => d === "full").length;
-  const pendingImport = advisor.pending_imports.length > 0;
+  const pendingImport = advisor.pending_imports.some((i) => !i.node_id || i.node_id === brief?.node_id);
   const rec = advisor.latest;
   const roleNames = roles.map((r) => r.name);
 
@@ -402,7 +410,7 @@ export default function OnboardingView() {
     switch (step) {
       case 0: return !canLeaveDefine ? "Title and research question unlock the next steps." : registrable ? (brief?.node_id ? `Registered on the project tree (${fields.visibility}). Continue when you are done editing.` : `Questions 1–3 answered — continuing registers this problem on the project tree (${fields.visibility}) and starts the advisor.`) : `${answered}/5 questions answered. Questions 1–3 are needed to register on the project tree; launch needs only the title and question.`;
       case 1: return `${fields.data.length} item${fields.data.length === 1 ? "" : "s"} attached. ${qdots[4] === "full" ? "Question 4 answered." : "Question 4 (task definition, existing results, access) is still open — optional."}`;
-      case 2: return brief?.node_id ? (advisor.running ? "The advisor is running; you can continue and come back." : pendingImport ? "An import is awaiting your approval above." : "Everything on this step is optional.") : registrable ? "Registering…" : "Answer questions 1–3 to register; or continue without the tree.";
+      case 2: return brief?.node_id ? (advisor.running ? "The advisor is running; you can continue and come back." : pendingImport ? "An import is awaiting your approval above." : "Everything on this step is optional.") : registering ? "Registering…" : registrable ? "Register to see the tree and the advisor — or continue without." : "Answer questions 1–3 to register; or continue without the tree.";
       case 3: return brief?.hypothesis ? "Working hypothesis set." : rec?.hypothesis_seed?.suggested ? "The advisor recommends running the search — still optional." : "Optional — you can launch without a hypothesis.";
       default: return pendingImport ? "An import approval is pending: decide it first so the session runs on the harness you intend." : "Launching starts the supervisor's first turn immediately.";
     }

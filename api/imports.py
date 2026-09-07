@@ -98,7 +98,10 @@ def ledger_path(iid: str) -> Path:
 def load_import(iid: str) -> dict | None:
     if not re.fullmatch(r"imp-[0-9]{8}-[0-9]{6}-[0-9a-f]{6}", iid or ""):
         return None
-    rec = read_json(ledger_path(iid), None)
+    try:
+        rec = read_json(ledger_path(iid), None)
+    except Exception:
+        return None
     return rec if isinstance(rec, dict) and rec.get("id") == iid else None
 
 
@@ -111,7 +114,10 @@ def save_import(rec: dict) -> dict:
 def list_imports(uid: str) -> list[dict]:
     out = []
     for p in projects.imports_dir().glob("imp-*.json"):
-        rec = read_json(p, None)
+        try:
+            rec = read_json(p, None)
+        except Exception:
+            continue
         if isinstance(rec, dict) and rec.get("user_id") == uid:
             out.append(rec)
     out.sort(key=lambda r: r.get("created") or "", reverse=True)
@@ -486,6 +492,15 @@ def add_tool_to_role_yaml(text: str, tool: str) -> tuple[str, bool]:
     (new_text, changed). Idempotent; preserves everything else byte-for-byte."""
     lines = text.splitlines(keepends=True)
     for i, line in enumerate(lines):
+        # Flow style: `tools: [a, b]` → insert inside the brackets.
+        m_flow = re.match(r"^(tools:\s*\[)(.*?)(\]\s*(#.*)?\n?)$", line)
+        if m_flow:
+            items = [x.strip().strip("'\"") for x in m_flow.group(2).split(",") if x.strip()]
+            if tool in items:
+                return text, False
+            items.append(tool)
+            lines[i] = f"{m_flow.group(1)}{', '.join(items)}{m_flow.group(3)}"
+            return "".join(lines), True
         if re.match(r"^tools:\s*(#.*)?$", line):
             j = i + 1
             indent = "  "
@@ -573,6 +588,7 @@ def prepare_harness_import(
             rec.update({"status": "failed", "error": f"{e.__class__.__name__}: {str(e)[:600]}"})
             save_import(rec)
             _remove_worktree(ctx.root, iid)
+            drop_ref(ctx.root, owner, version_id)
         raise
 
 
@@ -775,8 +791,11 @@ def apply_harness_import(ctx: UserContext, rec: dict) -> dict:
         archive.annotate_version(root, node["id"], imported_from=imported_from, import_id=iid)
         _remove_worktree(root, iid)
         rec.update({"status": "applied", "result": {"version_id": node["id"], "sha": head}})
-    _record_provenance(ctx, rec)
-    save_import(rec)
+    save_import(rec)  # the apply landed; provenance is best-effort from here on
+    try:
+        _record_provenance(ctx, rec)
+    except Exception:
+        pass
     session_event(ctx, sid, actor="system", kind="import.applied", import_id=iid, version=rec["result"]["version_id"])
     projects.event("import.applied", import_id=iid, user=ctx.user.user_id, version=rec["result"]["version_id"])
     return rec
@@ -872,6 +891,7 @@ def prepare_tool_import(
             rec.update({"status": "failed", "error": f"{e.__class__.__name__}: {str(e)[:600]}"})
             save_import(rec)
             _remove_worktree(ctx.root, iid)
+            drop_ref(ctx.root, owner, version_id)
         raise
 
 
@@ -1001,8 +1021,11 @@ def apply_tool_import(ctx: UserContext, rec: dict) -> dict:
     )
     _remove_worktree(root, iid)
     rec.update({"status": "applied", "result": {"version_id": node["id"], "sha": head, "tools": rec.get("tools")}})
-    _record_provenance(ctx, rec)
     save_import(rec)
+    try:
+        _record_provenance(ctx, rec)
+    except Exception:
+        pass
     session_event(ctx, sid, actor="system", kind="import.applied", import_id=iid, version=node["id"], tools=rec.get("tools"))
     projects.event("import.applied", import_id=iid, user=ctx.user.user_id, version=node["id"], tools=rec.get("tools"))
     return rec

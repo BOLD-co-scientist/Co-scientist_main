@@ -43,6 +43,8 @@ def test_add_tool_to_role_yaml_is_textual_and_idempotent():
     assert changed and out == "name: x\nmodel: m\ntools:\n  - bus\n  - fs_read\n  - fancy_tool\n\ncan_spawn: false\n"
     assert add_tool_to_role_yaml(out, "fancy_tool") == (out, False)
     assert add_tool_to_role_yaml("name: y\n", "t") == ("name: y\ntools:\n  - t\n", True)
+    assert add_tool_to_role_yaml("name: z\ntools: [bus, memory]\nx: 1\n", "t") == ("name: z\ntools: [bus, memory, t]\nx: 1\n", True)
+    assert add_tool_to_role_yaml("tools: [bus, t]\n", "t") == ("tools: [bus, t]\n", False)
 
 
 def test_harness_adopt_end_to_end(platform):

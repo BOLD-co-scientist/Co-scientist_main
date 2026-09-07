@@ -154,7 +154,10 @@ def request_rerun(pid: str) -> None:
 
 
 def latest(pid: str) -> dict | None:
-    rec = read_json(projects.recs_dir(pid) / "latest.json", None)
+    try:
+        rec = read_json(projects.recs_dir(pid) / "latest.json", None)
+    except Exception:
+        return None  # a half-written record must never take the wizard down
     return rec if isinstance(rec, dict) else None
 
 

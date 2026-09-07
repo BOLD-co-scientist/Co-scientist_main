@@ -1634,13 +1634,13 @@ async def _launch_brief(bid: str, req: schemas.LaunchBriefRequest, ctx: UserCont
     # without a node (Q1–Q3 are required to share, not to launch).
     if not rec.get("node_id") and not _onboarding.missing_for_registration(rec):
         try:
-            node, changed = _projects.register(ctx, rec)
+            node, changed = await asyncio.to_thread(_projects.register, ctx, rec)
             rec["node_id"] = node["id"]
             if changed:
                 await _spawn_advisor(ctx, node["id"], "launch")
         except Exception:
             pass
-    _stamp_launch_context(ctx, rec)
+    await asyncio.to_thread(_stamp_launch_context, ctx, rec)
 
     sid = _new_session_id()
     title = rec["title"].strip()
@@ -1791,7 +1791,7 @@ async def register_brief(bid: str, body: schemas.RegisterBriefRequest | None = N
         if body.visibility not in _onboarding.VISIBILITIES:
             raise HTTPException(422, "visibility must be org or private")
         rec["visibility"] = body.visibility
-    node, changed = _projects.register(ctx, rec)
+    node, changed = await asyncio.to_thread(_projects.register, ctx, rec)
     rec["node_id"] = node["id"]
     _onboarding.save_brief(ctx.state, rec)
     kicked = False

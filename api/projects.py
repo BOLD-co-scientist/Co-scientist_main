@@ -724,7 +724,10 @@ def near(pid: str, uid: str) -> dict | None:
 
 
 def latest_recommendation_summary(pid: str) -> dict | None:
-    rec = read_json(recs_dir(pid) / "latest.json", None)
+    try:
+        rec = read_json(recs_dir(pid) / "latest.json", None)
+    except Exception:
+        return None
     if not isinstance(rec, dict):
         return None
     return {
@@ -821,7 +824,9 @@ def sync_session(ctx: UserContext, sid: str) -> dict | None:
                         continue
                     k = e.get("kind")
                     if k == "research.complete":
-                        summary = str(e.get("summary") or e.get("reason") or summary)
+                        # A completion summary wins; a bare `reason` (e.g. "stopped")
+                        # must not overwrite the last real report.
+                        summary = str(e.get("summary") or summary or e.get("reason") or "")
                     elif k == "bus.send" and e.get("target") == "human":
                         payload = e.get("payload")
                         t = payload.get("text") if isinstance(payload, dict) else None
