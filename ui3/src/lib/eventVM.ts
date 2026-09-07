@@ -426,6 +426,24 @@ export function toVM(e: Ev, prev?: Ev, ctx?: VMCtx): EventVM {
   }
   if (e.kind === "research.complete")
     return { ...base, tone: "ok", label: "Research complete", body: firstStr("summary", "text") ?? "" };
+  // O2: the background advisor finished for this session's problem — a slim card
+  // (the full recommendation lives on the Projects page / onboarding step 3).
+  if (e.kind === "advisor.ready") {
+    const bits = [s("summary") ?? ""];
+    const h = (e as Record<string, unknown>).harness_import === true;
+    const t = typeof (e as Record<string, unknown>).tool_imports === "number" ? ((e as Record<string, unknown>).tool_imports as number) : 0;
+    if (h || t) bits.push(`_Recommends ${[h ? "a harness import" : null, t ? `${t} tool import${t === 1 ? "" : "s"}` : null].filter(Boolean).join(" and ")} — review on the Projects page._`);
+    return { ...base, label: "Project-tree advisor", body: bits.filter(Boolean).join("\n\n") };
+  }
+  // O2 imports (evo-import-* sessions): lifecycle on the spine with the evolution accent.
+  if (e.kind.startsWith("import.")) {
+    const state = e.kind.slice("import.".length);
+    const label: Record<string, string> = { requested: "import requested", approved: "import approved", applied: "import applied", rejected: "import rejected", failed: "import failed", conflict: "import conflicted", fallback: "import needs the evolution agent", auto_reject: "import auto-rejected (smoke failed)", evolving: "handed to the evolution agent" };
+    const extra = firstStr("note", "error", "version");
+    const title = (label[state] ?? humanize(e.kind)) + (extra ? ` · ${extra}` : "");
+    const bad = ["failed", "rejected", "conflict", "auto_reject"].includes(state);
+    return { variant: "spine", id: e.id, time, kind: e.kind, title, dot: bad ? "var(--err)" : state === "applied" ? "var(--ok)" : "var(--evo)" };
+  }
 
   const body = firstStr("text", "summary", "note", "detail", "msg_kind", "error", "message");
   // Totality guarantee: a record with no textual field must not render as a

@@ -99,17 +99,25 @@ def test_render_brief_fixed_section_order():
     rec = onboarding.new_record(dict(FULL))
     text = onboarding.render_brief(rec)
     heads = [line for line in text.splitlines() if line.startswith("#")]
+    # Brief v2 (O2): the five-question statement in a fixed order. An O1-era
+    # record (background, no significance/open_gap) renders the same headings.
     assert heads == [
         "# Problem brief: Antibiotic tolerance in stationary-phase E. coli",
-        "## Background",
+        "## Why this matters",
+        "## Prior work and what remains open",
         "## Research question",
         "## Objectives",
+        "## Evaluation protocol",
         "## Data",
         "## Constraints",
         "## Success criteria",
         "## Deliverables",
+        "## Project tree context",
+        "## Harness",
         "## Working hypothesis",
     ]
+    # The O1 `background` is read into "prior work".
+    assert "**What existing work has achieved:** " + FULL["background"] in text
     assert "1. Quantify survival vs growth phase" in text
     assert "No data files were attached" in text
     assert "No working hypothesis was selected" in text
@@ -121,10 +129,11 @@ def test_render_brief_empty_fields_get_explicit_placeholders():
     rec = onboarding.new_record({"title": "T", "research_question": "Q"})
     text = onboarding.render_brief(rec)
     # Every section is present even when empty, so the shape is always the same.
-    for h in ("## Background", "## Objectives", "## Constraints", "## Success criteria", "## Deliverables"):
+    for h in ("## Why this matters", "## Prior work and what remains open", "## Objectives", "## Evaluation protocol", "## Constraints", "## Success criteria", "## Deliverables", "## Project tree context", "## Harness"):
         assert h in text
-    assert "_No background given._" in text
+    assert "_Not stated — establish the state of the art" in text
     assert "_None stated._" in text
+    assert "not registered on the project tree" in text
 
 
 def test_brief_goal_uses_question_and_context():
@@ -133,7 +142,7 @@ def test_brief_goal_uses_question_and_context():
     rec = onboarding.new_record(dict(FULL, data=[{"path": "x.csv", "description": "growth"}]))
     goal, context = onboarding.brief_goal(rec)
     assert goal == FULL["research_question"]
-    assert "Background:" in context and "Objectives:" in context
+    assert "Prior work:" in context and "Objectives:" in context
     assert "- x.csv: growth" in context and "Constraints:" in context
     # Title-only briefs still produce a goal.
     goal2, _ = onboarding.brief_goal(onboarding.new_record({"title": "Just a title"}))
@@ -235,7 +244,7 @@ def test_launch_freezes_brief_into_session_and_hands_it_to_the_supervisor(api):
     hyp = r.json()
     assert hyp["brief_id"] == bid and len(hyp["rounds"][0]["hypotheses"]) == 3
     assert gen.calls[-1]["goal"] == FULL["research_question"]
-    assert "Background:" in gen.calls[-1]["context"] and "growth.csv" in gen.calls[-1]["context"]
+    assert "Prior work:" in gen.calls[-1]["context"] and "growth.csv" in gen.calls[-1]["context"]
     brief = client.get(f"/onboarding/briefs/{bid}", headers=headers).json()
     assert brief["hypothesis_session_id"] == hyp["id"] and brief["hypothesis"] is None
 
@@ -452,10 +461,10 @@ def test_refine_keeps_brief_context(api):
     client, headers, ctx, server, _spawned, gen = api
     bid = client.post("/onboarding/briefs", json=FULL, headers=headers).json()["id"]
     h = client.post(f"/onboarding/briefs/{bid}/hypotheses", json={}, headers=headers).json()
-    assert "Background:" in h["context"]
+    assert "Prior work:" in h["context"]
     r = client.post(f"/hypothesis/{h['id']}/refine", json={"parent_id": h["rounds"][0]["hypotheses"][0]["id"], "feedback": "sharper"}, headers=headers)
     assert r.status_code == 200, r.text
-    assert gen.calls[-1]["parent"] is not None and "Background:" in (gen.calls[-1]["context"] or "")
+    assert gen.calls[-1]["parent"] is not None and "Prior work:" in (gen.calls[-1]["context"] or "")
     # Free-form searches carry no context.
     free = client.post("/hypothesis/sessions", json={"goal": "why?"}, headers=headers).json()
     client.post(f"/hypothesis/{free['id']}/refine", json={"parent_id": free["rounds"][0]["hypotheses"][0]["id"]}, headers=headers)

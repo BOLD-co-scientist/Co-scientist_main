@@ -37,7 +37,7 @@ const REFL_DISMISS_KEY = "cs_refl_dismissed"; // sids whose reflection nudge was
 const isEvo = (sid: string) => sid.startsWith("evo-");
 const USE_MOCK = import.meta.env.VITE_MOCK === "1";
 
-type MainView = "session" | "hypothesis" | "evolution" | "onboarding";
+type MainView = "session" | "hypothesis" | "evolution" | "onboarding" | "projects";
 type RightTab = "hitl" | "files" | "context";
 type Theme = "dark" | "light";
 
@@ -75,6 +75,14 @@ interface AppCtx {
   launchBrief: (bid: string) => Promise<string | null>;
   /** The frozen brief of the active session (null for free-form sessions). */
   sessionBrief: SessionBrief | null;
+
+  // ---- project tree (O2) ----
+  /** Node to focus when the Projects page opens (null = overview). */
+  projectFocus: string | null;
+  openProject: (pid: string | null) => void;
+  /** "Start a subproblem here": a new draft prefilled from a node → onboarding. */
+  startBriefFromNode: (pid: string) => Promise<void>;
+  downloadLibrary: (name: string) => void;
 
   events: Ev[];
   pending: HitlPending[];
@@ -217,6 +225,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     () => localStorage.getItem(BRIEF_KEY),
   );
   const [sessionBrief, setSessionBrief] = useState<SessionBrief | null>(null);
+  const [projectFocus, setProjectFocus] = useState<string | null>(null);
 
   const setOnboardingBriefId = useCallback((bid: string | null) => {
     setOnboardingBriefIdState(bid);
@@ -626,6 +635,35 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setMainView("onboarding");
   }, []);
 
+  // O2: the Projects page (org-wide tree), optionally focused on one node.
+  const openProject = useCallback((pid: string | null) => {
+    setProjectFocus(pid);
+    setMainView("projects");
+  }, []);
+
+  // O2: "Start a subproblem here" → the server prefills a draft from the node
+  // (domain, keywords, prior work, parent link) and the wizard opens on it.
+  const startBriefFromNode = useCallback(
+    async (pid: string) => {
+      try {
+        const rec = await api.spawnBrief(pid);
+        setOnboardingBriefId(rec.id);
+        setDraftNew(false);
+        setMainView("onboarding");
+      } catch (e) {
+        setSendNotice(e instanceof HttpError ? `Could not start from that problem: ${e.message}` : "Could not start from that problem.");
+      }
+    },
+    [api, setOnboardingBriefId],
+  );
+
+  const downloadLibrary = useCallback(
+    (name: string) => {
+      void api.downloadLibrary(name).catch(() => setSendNotice("Download failed."));
+    },
+    [api],
+  );
+
   // Launch a brief → the server creates the session and starts its first turn
   // with the whole brief; we then open that session like any other.
   const launchBrief = useCallback(
@@ -994,6 +1032,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setOnboardingBriefId,
     launchBrief,
     sessionBrief,
+    projectFocus,
+    openProject,
+    startBriefFromNode,
+    downloadLibrary,
     events,
     pending,
     hasPending,

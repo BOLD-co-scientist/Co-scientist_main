@@ -1,0 +1,19 @@
+{
+  "title": "Antibiotic tolerance in stationary-phase E. coli",
+  "domain": "microbiology",
+  "background": "Some populations survive bactericidal antibiotics without resistance mutations.",
+  "research_question": "What physiological state predicts tolerance in the LTEM strains?",
+  "objectives": ["Quantify survival vs growth phase", "Identify a predictive marker"],
+  "data": [{"path": "growth.csv", "description": "OD600 growth curves"}],
+  "data_notes": "CSV growth curves, one file per strain.",
+  "constraints": "No wet-lab work; analysis only.",
+  "success_criteria": "A marker with AUC > 0.8 on held-out strains.",
+  "deliverables": ["Report (PDF)"],
+  "hypothesis": {"id": "h0_1_abc", "statement": "Persisters survive via metabolic shutdown.", "rationale": "Phenotypic tolerance.", "note": null},
+  "id": "brief-20260905-101010-abcdef",
+  "status": "draft",
+  "created": "2026-09-05 10:10:10",
+  "updated": "2026-09-05 10:20:00",
+  "hypothesis_session_id": "20260905-101500-aaaaaa",
+  "session_id": null
+}

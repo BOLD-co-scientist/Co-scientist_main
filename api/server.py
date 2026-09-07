@@ -26,6 +26,9 @@ from . import goals as _goals
 from . import judge as _judge
 from . import onboarding as _onboarding
 from . import planner as _planner
+from . import advisor as _advisor
+from . import imports as _imports
+from . import projects as _projects
 from . import schemas
 from .auth import User, require_user
 from .tenancy import UserContext, context_for
@@ -269,11 +272,18 @@ async def _monitor_runtime(
             kind="session.crashed",
             error=f"runtime exited with code {rc}; see state/sessions/{sid}/runtime.log",
         )
-    elif not sid.startswith("evo-") and settings.EVO_REFLECT:
-        # R16: a research turn finished cleanly → kick the read-only reflection
-        # pass in its own detached subprocess so it never delays or blocks the
-        # turn, and stays a separate node from the (heavy) evolution modifier.
-        await _spawn_reflection(ctx, sid)
+    elif not sid.startswith("evo-"):
+        # O2: record the outcome one-liner / results / version on the session's
+        # project-tree node (cheap, file-only; never fatal).
+        try:
+            _projects.sync_session(ctx, sid)
+        except Exception:
+            pass
+        if settings.EVO_REFLECT:
+            # R16: a research turn finished cleanly → kick the read-only reflection
+            # pass in its own detached subprocess so it never delays or blocks the
+            # turn, and stays a separate node from the (heavy) evolution modifier.
+            await _spawn_reflection(ctx, sid)
     # R19: close the guided-search loop. An evolution session links its
     # proposal to the outcome and drains the approved queue; a clean research
     # turn records adoption and re-plans for its brief.
@@ -681,6 +691,13 @@ def delete_session(sid: str, ctx: UserContext = Depends(_ctx)):
     target = ctx.session_dir(sid)
     if not target.exists():
         raise HTTPException(404, "unknown session")
+    # O2: deleting an evo-import-* session withdraws its pending import (worktree,
+    # fetched ref, ledger) instead of stranding a `pending` record that would
+    # block every later import.
+    if sid.startswith("evo-import-"):
+        imp = _imports.load_import(_imports.import_id_from_session(sid) or "")
+        if imp and imp.get("user_id") == ctx.user.user_id and imp.get("status") in ("pending", "preparing"):
+            _imports.reject_import(ctx, imp, "session deleted")
     # O1: a session launched from a brief owns that brief's "launched" status.
     # Deleting the session hands the brief back as a draft so it can be edited
     # and relaunched instead of being stranded (frozen, hidden from drafts).
@@ -823,6 +840,18 @@ def list_library_files(ctx: UserContext = Depends(_ctx)):
     return out
 
 
+@app.get("/library/files/download")
+def download_library_file(name: str, ctx: UserContext = Depends(_ctx)):
+    """O2: every library file is retrievable at any time. Same traversal
+    guards as upload/delete; tenant-scoped; folders are not downloadable
+    (pick a file inside)."""
+    rel = _safe_library_relpath(name)
+    target = _resolve_library_path(ctx, rel)
+    if not target.exists() or not target.is_file():
+        raise HTTPException(404, f"no such library file: {rel.as_posix()}")
+    return FileResponse(target, filename=target.name)
+
+
 @app.delete("/library/files/{name:path}")
 def delete_library_file(name: str, ctx: UserContext = Depends(_ctx)):
     """Delete a library file or folder by its library-relative path. A folder
@@ -916,7 +945,24 @@ def hitl_answer(
         raise HTTPException(400, f"invalid request id: {request_id!r}")
     if not _session_exists(ctx, sid):
         raise HTTPException(404, "unknown session")
+    # O2: an import approval is answered by the API itself (no runtime owns the
+    # evo-import-* session). Approving rewrites the tenant's agent-layer code,
+    # so it takes the R17 switch protocol: refuse BEFORE consuming the request
+    # while a turn runs or a switch is in flight (the request stays pending and
+    # can be answered later); then apply under the switch lock. Failures land
+    # on the ledger, never as a 500.
+    imp = _imports.import_for_request(ctx, sid, request_id) if sid.startswith("evo-import-") else None
+    if imp is not None and body.decision == "approve":
+        if _is_switch_locked(ctx):
+            raise HTTPException(409, "a version switch is in progress — approve again in a moment")
+        if _tenant_busy(ctx):
+            raise HTTPException(409, "stop the running research/evolution turn, then approve the import")
+    # R19: one writer for every human answer — it also records an evolution-merge
+    # decision into the eval folder the planner and judge read next time.
     _answer_pending(ctx, sid, request_id, body.decision, body.note, actor="human")
+    if imp is not None:
+        out = _imports.on_answer(ctx, imp, body.decision, body.note, guarded=lambda fn: _guarded_switch(ctx, fn))
+        return {"ok": True, "import": out}
     return {"ok": True}
 
 
@@ -1054,21 +1100,51 @@ def activate_version(version_id: str, ctx: UserContext = Depends(_ctx)):
     NOT waited on. Returns the refreshed version DAG (with the new active node)."""
     if not re.fullmatch(r"[0-9A-Za-z._][0-9A-Za-z._-]{0,119}", version_id or ""):
         raise HTTPException(400, f"invalid version id: {version_id!r}")
-    # (1) block new spawns FIRST, then (2) verify nothing is in flight, then swap.
+    _guarded_activate(ctx, version_id)
+    return archive.list_versions(ctx.root)
+
+
+def _guarded_switch(ctx: UserContext, fn, label: str = "switch"):
+    """The R17 switch protocol around any change to the tenant's agent-layer
+    code: (1) block new spawns FIRST (switch_lock), then (2) verify nothing is
+    in flight, then run ``fn``. Shared by version activation and every O2
+    import apply (adopt / merge / tool)."""
     lock = _switch_lock_path(ctx)
     lock.parent.mkdir(parents=True, exist_ok=True)
-    lock.write_text(version_id, encoding="utf-8")
+    if lock.exists():
+        raise HTTPException(409, "a version switch is in progress — retry in a moment")
+    lock.write_text(label, encoding="utf-8")
     try:
         if _tenant_busy(ctx):
             raise HTTPException(
                 409, "stop the running research/evolution turn before switching versions"
             )
-        try:
-            archive.activate_version(ctx.root, version_id)
-        except archive.ArchiveError as e:
-            raise HTTPException(409, str(e))
+        return fn()
     finally:
         lock.unlink(missing_ok=True)
+
+
+def _guarded_activate(ctx: UserContext, version_id: str) -> str:
+    def _do():
+        try:
+            return archive.activate_version(ctx.root, version_id)
+        except archive.ArchiveError as e:
+            raise HTTPException(409, str(e))
+
+    return _guarded_switch(ctx, _do, label=version_id)
+
+
+@app.post("/versions/{version_id}/share")
+def share_version(version_id: str, body: schemas.VersionShare, ctx: UserContext = Depends(_ctx)):
+    """O2: make one of your versions discoverable/importable by colleagues even
+    if it is not linked to a shared, launched problem (additive `shared` key on
+    its meta.json). Pass {"shared": false} to withdraw."""
+    if not re.fullmatch(r"[0-9A-Za-z._][0-9A-Za-z._-]{0,119}", version_id or ""):
+        raise HTTPException(400, f"invalid version id: {version_id!r}")
+    meta = archive.annotate_version(ctx.root, version_id, shared=bool(body.shared))
+    if meta is None:
+        raise HTTPException(404, "unknown version (no archive manifest)")
+    _projects.event("version.shared" if body.shared else "version.unshared", user=ctx.user.user_id, version=version_id)
     return archive.list_versions(ctx.root)
 
 
@@ -1415,17 +1491,24 @@ def _resolve_brief_data(ctx: UserContext, rec: dict) -> list[str]:
     return problems
 
 
-def _apply_brief_patch(rec: dict, fields: dict) -> None:
+def _apply_brief_patch(rec: dict, fields: dict, ctx: UserContext | None = None) -> None:
     try:
         _onboarding.merge_fields(rec, fields)
     except ValueError as e:
         raise HTTPException(422, str(e))
+    pn = rec.get("parent_node")
+    if pn:
+        node = _projects.load_node(pn)
+        # An unknown node and another tenant's private node look the same (no
+        # existence leak).
+        if not node or (ctx is not None and not _projects.visible(node, ctx.user.user_id)):
+            raise HTTPException(422, f"unknown parent node {pn!r}")
 
 
 @app.post("/onboarding/briefs", response_model=schemas.BriefRecord)
 def create_brief(body: schemas.ProblemBrief, ctx: UserContext = Depends(_ctx)):
     rec = _onboarding.new_record({})
-    _apply_brief_patch(rec, body.model_dump())
+    _apply_brief_patch(rec, body.model_dump(), ctx)
     _onboarding.save_brief(ctx.state, rec)
     return rec
 
@@ -1445,15 +1528,25 @@ def update_brief(bid: str, body: schemas.BriefPatch, ctx: UserContext = Depends(
     rec = _load_brief_or_404(ctx, bid)
     if rec.get("status") == "launched":
         raise HTTPException(409, "brief already launched; it is frozen with its session")
-    _apply_brief_patch(rec, body.model_dump(exclude_unset=True))
+    _apply_brief_patch(rec, body.model_dump(exclude_unset=True), ctx)
     _onboarding.save_brief(ctx.state, rec)
     return rec
 
 
 @app.delete("/onboarding/briefs/{bid}")
 def delete_brief(bid: str, ctx: UserContext = Depends(_ctx)):
-    _load_brief_or_404(ctx, bid)
+    rec = _load_brief_or_404(ctx, bid)
     _onboarding.brief_path(ctx.state, _safe_bid(bid)).unlink(missing_ok=True)
+    # O2: a node registered from this draft that never ran is withdrawn with it;
+    # one that has sessions stays (it is part of the org's history).
+    node = _projects.load_node(rec.get("node_id") or "") if rec.get("node_id") else None
+    if node and _projects.is_owner(node, ctx.user.user_id) and not ((node.get("links") or {}).get("sessions")):
+        try:
+            _projects.set_status(node, "abandoned")
+            node["visibility"] = "private"
+            _projects.save_node(node)
+        except Exception:
+            pass
     return {"ok": True, "brief_id": bid}
 
 
@@ -1466,6 +1559,7 @@ def preview_brief(bid: str, ctx: UserContext = Depends(_ctx)):
     # and surfaces unresolvable attachments before the human hits Launch.
     probe = json.loads(json.dumps(rec))
     problems = _resolve_brief_data(ctx, probe)
+    _stamp_launch_context(ctx, probe)
     text = _onboarding.opening_message(probe, ctx.library)
     size = len(text.encode("utf-8"))
     return schemas.BriefPreview(
@@ -1475,7 +1569,27 @@ def preview_brief(bid: str, ctx: UserContext = Depends(_ctx)):
         size_bytes=size,
         max_bytes=_onboarding.OPENING_MESSAGE_MAX_BYTES,
         too_large=size > _onboarding.OPENING_MESSAGE_MAX_BYTES,
+        missing_for_registration=_onboarding.missing_for_registration(rec),
+        pending_imports=[r["id"] for r in _imports.pending_imports(ctx.user.user_id, ctx)],
+        completeness=_onboarding.completeness(rec),
     )
+
+
+def _stamp_launch_context(ctx: UserContext, rec: dict) -> None:
+    """O2: what the session runs on (active version + tools) and where the
+    problem sits on the tree — composed server-side so every tenant gets it."""
+    try:
+        rec["harness"] = _projects.harness_stamp(ctx.root)
+    except Exception:
+        rec["harness"] = None
+    node_id = rec.get("node_id")
+    if node_id and not _projects.load_node(node_id):
+        node_id = None
+    if not node_id:
+        n = _projects.node_for_brief(ctx.user.user_id, str(rec.get("id")))
+        node_id = n["id"] if n else None
+        rec["node_id"] = node_id
+    rec["tree_context"] = _projects.render_tree_context(node_id, ctx.user.user_id) if node_id else ""
 
 
 @app.post("/onboarding/briefs/{bid}/hypotheses")
@@ -1550,6 +1664,20 @@ async def _launch_brief(bid: str, req: schemas.LaunchBriefRequest, ctx: UserCont
                     "note": hyp_rec.get("select_note"),
                 }
 
+    # O2: a complete statement is registered on the project tree at launch if
+    # the human never did it explicitly (with the visibility they chose), so the
+    # tree stays the map of everything that ran. Incomplete statements launch
+    # without a node (Q1–Q3 are required to share, not to launch).
+    if not rec.get("node_id") and not _onboarding.missing_for_registration(rec):
+        try:
+            node, changed = await asyncio.to_thread(_projects.register, ctx, rec)
+            rec["node_id"] = node["id"]
+            if changed:
+                await _spawn_advisor(ctx, node["id"], "launch")
+        except Exception:
+            pass
+    await asyncio.to_thread(_stamp_launch_context, ctx, rec)
+
     sid = _new_session_id()
     title = rec["title"].strip()
     frozen = dict(rec)
@@ -1588,6 +1716,9 @@ async def _launch_brief(bid: str, req: schemas.LaunchBriefRequest, ctx: UserCont
         research_question=frozen.get("research_question", ""),
         hypothesis=hyp.get("statement") if isinstance(hyp, dict) else None,
         data=[d.get("path") for d in frozen.get("data") or []],
+        node_id=frozen.get("node_id"),
+        harness=frozen.get("harness"),
+        tree_context=frozen.get("tree_context"),
         text=_onboarding.render_brief(frozen, ctx.library),
     )
     _clear_stop(ctx, sid)
@@ -1602,10 +1733,297 @@ async def _launch_brief(bid: str, req: schemas.LaunchBriefRequest, ctx: UserCont
 
     rec.update({"status": "launched", "session_id": sid})
     _onboarding.save_brief(ctx.state, rec)
+    # O2: the session is now a link on the node (status registered → active).
+    if rec.get("node_id"):
+        node = _projects.load_node(rec["node_id"])
+        if node and _projects.is_owner(node, ctx.user.user_id):
+            try:
+                _projects.link_session(node, sid, frozen.get("harness"), ctx.root)
+            except Exception:
+                pass
     # R19: derive the goal ledger (if not yet) and propose what the first
     # subgoals will need — proactively, before the session runs into the gap.
     _schedule_plan(ctx, rec["id"], trigger="launch", delay=0)
-    return schemas.LaunchBriefResponse(session_id=sid, task=title, brief_id=rec["id"])
+    return schemas.LaunchBriefResponse(session_id=sid, task=title, brief_id=rec["id"], node_id=rec.get("node_id"))
+
+
+# ---------- project tree (O2): register → tree → advisor → imports ----------
+#
+# A platform-owned registry of problems (api/projects.py), a background Fable
+# advisor (api/advisor.py) and human-gated cross-tenant imports (api/imports.py).
+# Plan: docs/plans/O2-project-tree-advisor.md.
+
+
+async def _reap(proc: "asyncio.subprocess.Process", log_fh) -> None:
+    try:
+        await proc.wait()
+    finally:
+        try:
+            log_fh.close()
+        except Exception:
+            pass
+
+
+async def _spawn_advisor(ctx: UserContext, pid: str, trigger: str) -> bool:
+    """Kick the background advisor for a node as a detached subprocess (the R16
+    runner pattern, platform-side: cwd = the platform root so it imports the
+    shared api/ + scaffold/, never a tenant's frozen fork). Advisory only —
+    failures are swallowed so no request is ever blocked."""
+    if _advisor.is_running(pid):
+        # A run is in flight with the OLD statement: ask it to go again when
+        # done rather than silently keeping a stale record.
+        _advisor.request_rerun(pid)
+        return False
+    try:
+        env = dict(os.environ)
+        env["COSCIENTIST_ROOT"] = str(settings.ROOT)
+        env["PYTHONPATH"] = str(settings.ROOT)
+        user_key = _read_user_agent_key(ctx)
+        if user_key:
+            env["ANTHROPIC_API_KEY"] = user_key
+        log_fh = open(_projects.recs_dir(pid) / "advisor.log", "ab")
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable, "-m", "api.advisor", "--node", pid, "--user", ctx.user.user_id, "--trigger", trigger,
+            cwd=str(settings.ROOT),
+            env=env,
+            stdout=log_fh,
+            stderr=log_fh,
+        )
+        # Hold the lock on the child's behalf from this instant, so
+        # `running` is true before the child has finished importing (the UI
+        # polls on it) and a second spawn cannot slip in meanwhile. The child
+        # recognises its own pid and takes the lock over.
+        _advisor.hold_lock_for(pid, proc.pid)
+        asyncio.create_task(_reap(proc, log_fh))
+        return True
+    except Exception:
+        return False
+
+
+def _safe_pid(raw: str) -> str:
+    if not _projects.safe_pid(raw or ""):
+        raise HTTPException(400, f"invalid project node id: {raw!r}")
+    return raw
+
+
+def _node_or_404(pid: str, ctx: UserContext, *, owner: bool = False) -> dict:
+    node = _projects.load_node(_safe_pid(pid))
+    if not node or not _projects.visible(node, ctx.user.user_id):
+        raise HTTPException(404, "unknown project node")
+    if owner and not _projects.is_owner(node, ctx.user.user_id):
+        raise HTTPException(403, "only the owner can do that")
+    return node
+
+
+@app.post("/onboarding/briefs/{bid}/register")
+async def register_brief(bid: str, body: schemas.RegisterBriefRequest | None = None, ctx: UserContext = Depends(_ctx)):
+    """Create/update this brief's node on the org project tree (422 while
+    questions 1–3 are unanswered) and kick the advisor when the statement
+    changed. Idempotent; the wizard calls it when leaving step 1 and on step 3."""
+    rec = _load_brief_or_404(ctx, bid)
+    if rec.get("status") == "launched":
+        raise HTTPException(409, "brief already launched; edit the node from the Projects page")
+    missing = _onboarding.missing_for_registration(rec)
+    if missing:
+        raise HTTPException(422, {"missing": missing, "detail": "answer questions 1–3 to register on the project tree"})
+    if body and body.visibility:
+        if body.visibility not in _onboarding.VISIBILITIES:
+            raise HTTPException(422, "visibility must be org or private")
+        rec["visibility"] = body.visibility
+    node, changed = await asyncio.to_thread(_projects.register, ctx, rec)
+    rec["node_id"] = node["id"]
+    _onboarding.save_brief(ctx.state, rec)
+    kicked = False
+    if changed or not _advisor.latest(node["id"]):
+        kicked = await _spawn_advisor(ctx, node["id"], "register")
+    view = _projects.node_view(node["id"], ctx.user.user_id) or {}
+    return {"node": view, "changed": changed, "advisor_started": kicked, "brief": rec}
+
+
+@app.get("/projects/tree")
+def project_tree(ctx: UserContext = Depends(_ctx)):
+    """Every org node (plus your private ones) and the edges between them."""
+    return _projects.tree(ctx.user.user_id)
+
+
+@app.get("/projects/imports")
+def list_project_imports(ctx: UserContext = Depends(_ctx)):
+    return _imports.list_imports(ctx.user.user_id)
+
+
+@app.get("/projects/imports/{iid}")
+def get_project_import(iid: str, ctx: UserContext = Depends(_ctx)):
+    rec = _imports.load_import(iid)
+    if not rec or rec.get("user_id") != ctx.user.user_id:
+        raise HTTPException(404, "unknown import")
+    return rec
+
+
+@app.get("/projects/{pid}")
+def project_node(pid: str, ctx: UserContext = Depends(_ctx)):
+    view = _projects.node_view(_safe_pid(pid), ctx.user.user_id)
+    if not view:
+        raise HTTPException(404, "unknown project node")
+    return view
+
+
+@app.get("/projects/{pid}/near")
+def project_near(pid: str, ctx: UserContext = Depends(_ctx)):
+    view = _projects.near(_safe_pid(pid), ctx.user.user_id)
+    if not view:
+        raise HTTPException(404, "unknown project node")
+    return view
+
+
+@app.patch("/projects/{pid}")
+def patch_project(pid: str, body: schemas.NodePatch, ctx: UserContext = Depends(_ctx)):
+    node = _node_or_404(pid, ctx, owner=True)
+    try:
+        _projects.patch_node(node, body.model_dump(exclude_unset=True))
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    return _projects.node_view(node["id"], ctx.user.user_id)
+
+
+@app.post("/projects/{pid}/edges")
+def declare_project_edge(pid: str, body: schemas.EdgeDeclare, ctx: UserContext = Depends(_ctx)):
+    node = _node_or_404(pid, ctx, owner=True)
+    if body.type not in _projects.EDGE_TYPES:
+        raise HTTPException(422, f"type must be one of {', '.join(_projects.EDGE_TYPES)}")
+    _node_or_404(body.dst, ctx)
+    if body.dst == node["id"]:
+        raise HTTPException(422, "a node cannot relate to itself")
+    try:
+        _projects.declare_edge(node, body.dst, body.type, body.rationale, ctx.user.user_id)
+    except KeyError:
+        raise HTTPException(404, "unknown target node")
+    return _projects.node_view(node["id"], ctx.user.user_id)
+
+
+@app.post("/projects/{pid}/edges/{eid}/{decision}")
+def decide_project_edge(pid: str, eid: str, decision: str, ctx: UserContext = Depends(_ctx)):
+    node = _node_or_404(pid, ctx)
+    if decision not in ("confirm", "reject"):
+        raise HTTPException(400, "decision must be confirm or reject")
+    if not re.fullmatch(r"[0-9a-f]{12}", eid or ""):
+        raise HTTPException(400, "invalid edge id")
+    try:
+        _projects.decide_edge(eid, ctx.user.user_id, decision)
+    except KeyError:
+        raise HTTPException(404, "unknown edge")
+    except PermissionError:
+        raise HTTPException(403, "only an owner of either problem can decide this relation")
+    return _projects.node_view(node["id"], ctx.user.user_id)
+
+
+@app.post("/projects/{pid}/spawn-brief", response_model=schemas.BriefRecord)
+def spawn_brief_from_node(pid: str, ctx: UserContext = Depends(_ctx)):
+    """Start a new draft brief as a subproblem of (or follow-up to) a node:
+    same domain/keywords, the parent's statement as prior work, parent link."""
+    node = _node_or_404(pid, ctx)
+    rec = _onboarding.new_record(_projects.spawn_brief_fields(node))
+    _onboarding.save_brief(ctx.state, rec)
+    return rec
+
+
+@app.post("/projects/{pid}/advise")
+async def advise_project(pid: str, ctx: UserContext = Depends(_ctx)):
+    """Manual (re)run of the background advisor for one of your nodes."""
+    node = _node_or_404(pid, ctx, owner=True)
+    if _advisor.is_running(node["id"]):
+        return {"ok": True, "running": True, "started": False}
+    started = await _spawn_advisor(ctx, node["id"], "manual")
+    if not started:
+        raise HTTPException(500, "could not start the advisor; see recommendations/<pid>/advisor.log")
+    return {"ok": True, "running": True, "started": True}
+
+
+@app.get("/projects/{pid}/recommendations")
+def project_recommendations(pid: str, ctx: UserContext = Depends(_ctx)):
+    """The latest advisor record for one of your nodes (+ whether a run is in
+    flight). Polled by the wizard while `running`."""
+    node = _node_or_404(pid, ctx, owner=True)
+    st = _advisor.status(node["id"])
+    latest = st["latest"]
+    # Decorate the harness recommendation with the live import state so the
+    # card can say "pending approval" / "imported" without a second call.
+    pending = _imports.pending_imports(ctx.user.user_id, ctx)
+    return {"running": st["running"], "latest": latest, "pending_imports": pending, "imports": [r for r in _imports.list_imports(ctx.user.user_id) if r.get("node_id") == node["id"]][:10]}
+
+
+@app.post("/projects/{pid}/imports")
+async def create_project_import(pid: str, body: schemas.ImportRequest, ctx: UserContext = Depends(_ctx)):
+    """Start a human-gated import for one of your nodes: a colleague's harness
+    version (adopt | merge) or specific tools from it. The API fetches the
+    version, runs the smoke + compat gate in a temporary worktree, and opens an
+    approval request in session `evo-import-<id>`; answer it via the normal
+    HITL route. Tool imports whose smoke fails come back as `fallback` with a
+    ready-made evolution command (POST it to /evolution/commands)."""
+    node = _node_or_404(pid, ctx, owner=True)
+    _guard_not_switching(ctx)
+    if _tenant_busy(ctx):
+        raise HTTPException(409, "stop the running research/evolution turn before importing")
+    if not re.fullmatch(r"u_[0-9a-f]{16}", body.owner or ""):
+        raise HTTPException(400, "invalid owner id")
+    latest = _advisor.latest(node["id"]) or {}
+    rec_id = latest.get("rec_id")
+    try:
+        if body.kind == "harness":
+            mode = body.mode or (((latest.get("harness_import") or {}).get("mode_hint")) if (latest.get("harness_import") or {}).get("version_id") == body.version_id else None) or "adopt"
+            rec = await asyncio.to_thread(
+                _imports.prepare_harness_import,
+                ctx,
+                owner=body.owner,
+                version_id=body.version_id,
+                mode=mode,
+                include_skills=body.include_skills,
+                node_id=node["id"],
+                rec_id=rec_id,
+            )
+        elif body.kind == "tool":
+            roles = body.roles or []
+            if not roles:
+                # Default wiring from the advisor's suggestion for these tools, if any.
+                for ti in latest.get("tool_imports") or []:
+                    if ti.get("name") in (body.tools or []) and ti.get("owner") == body.owner:
+                        roles = list(dict.fromkeys(roles + list(ti.get("role_wiring") or [])))
+            rec = await asyncio.to_thread(
+                _imports.prepare_tool_import,
+                ctx,
+                owner=body.owner,
+                version_id=body.version_id,
+                tools=body.tools or [],
+                roles=roles,
+                node_id=node["id"],
+                rec_id=rec_id,
+            )
+        else:
+            raise HTTPException(400, "kind must be harness or tool")
+    except _imports.ImportError_ as e:
+        raise HTTPException(e.status, str(e))
+    return rec
+
+
+@app.post("/projects/imports/{iid}/evolve")
+async def evolve_project_import(iid: str, ctx: UserContext = Depends(_ctx)):
+    """Hand a `fallback`/`conflict` import to the evolution agent with the
+    command the API composed (the donor commit is already fetched). Returns the
+    evolution session id; the merge goes through the normal evolution gate."""
+    rec = _imports.load_import(iid)
+    if not rec or rec.get("user_id") != ctx.user.user_id:
+        raise HTTPException(404, "unknown import")
+    if rec.get("status") not in ("fallback", "conflict") or not rec.get("evolution_command"):
+        raise HTTPException(409, "this import does not need the evolution agent")
+    _guard_not_switching(ctx)
+    sid = _safe_sid("evo-" + _new_session_id())
+    _ensure_session_dirs(ctx, sid)
+    _append_event(ctx, sid, actor="human", kind="evolution.requested", command=rec["evolution_command"], base="HEAD", import_id=iid)
+    _clear_stop(ctx, sid)
+    await _spawn_evolution(ctx, sid, rec["evolution_command"], None)
+    rec.update({"status": "evolving", "fallback_session": sid})
+    _imports.save_import(rec)
+    _projects.event("import.evolving", import_id=iid, session=sid)
+    return {"ok": True, "session_id": sid, "import": rec}
 
 
 # ---------- R19: guided evolution search (goal ledger, planner, judge, modes) ----------

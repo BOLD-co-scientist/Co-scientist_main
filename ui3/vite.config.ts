@@ -24,6 +24,7 @@ const API_PREFIXES = [
   "/evolution",
   "/hypothesis",
   "/onboarding",
+  "/projects",
 ];
 
 export default defineConfig({

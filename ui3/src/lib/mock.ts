@@ -1,5 +1,6 @@
 import type { Api, StreamHandle } from "./api";
 import type {
+  AdvisorRecord,
   BriefRecord,
   Ev,
   GitHistory,
@@ -8,7 +9,11 @@ import type {
   GoalLedger,
   HypSession,
   ProposalList,
+  ImportRecord,
   LibraryFile,
+  ProjectEdge,
+  ProjectNodeSummary,
+  ProjectNodeView,
   RoleSummary,
   SessionSummary,
   Skill,
@@ -21,15 +26,42 @@ export function emptyBrief(): Omit<BriefRecord, "id" | "status" | "created" | "u
   return {
     title: "",
     domain: "",
-    background: "",
     research_question: "",
     objectives: [],
+    significance: "",
+    prior_work: "",
+    open_gap: "",
+    evaluation_protocol: "",
+    success_criteria: "",
     data: [],
+    task_definition: "",
+    existing_results: "",
+    data_access: "",
     data_notes: "",
     constraints: "",
-    success_criteria: "",
     deliverables: [],
+    keywords: [],
+    visibility: "org",
+    parent_node: null,
+    node_id: null,
+    harness: null,
+    tree_context: null,
   };
+}
+
+const REGISTRATION_FIELDS = ["title", "research_question", "significance", "prior_work", "open_gap", "evaluation_protocol"] as const;
+export function mockCompleteness(b: BriefRecord) {
+  const has = (k: keyof BriefRecord) => {
+    const v = b[k];
+    return Array.isArray(v) ? v.length > 0 : typeof v === "string" && v.trim().length > 0;
+  };
+  return [
+    { q: 0, label: "Definition of the problem", filled: has("title") && has("research_question"), missing: (["title", "research_question"] as const).filter((k) => !has(k)) as string[] },
+    { q: 1, label: "Why the problem is scientifically important", filled: has("significance"), missing: has("significance") ? [] : ["significance"] },
+    { q: 2, label: "What existing work has achieved, and what remains genuinely open", filled: has("prior_work") && has("open_gap"), missing: (["prior_work", "open_gap"] as const).filter((k) => !has(k)) as string[] },
+    { q: 3, label: "How progress is evaluated objectively — no hackable proxy, shortcut or subjective judgement", filled: has("evaluation_protocol"), missing: has("evaluation_protocol") ? [] : ["evaluation_protocol"] },
+    { q: 4, label: "The exact dataset, metadata, task definition, evaluation protocol, existing results and permissions", filled: has("task_definition") && has("existing_results") && has("data_access"), missing: (["task_definition", "existing_results", "data_access"] as const).filter((k) => !has(k)) as string[] },
+  ];
 }
 
 function renderMockBrief(b: BriefRecord): string {
@@ -44,9 +76,14 @@ function renderMockBrief(b: BriefRecord): string {
   return [
     `# Problem brief: ${b.title || "(untitled)"}`,
     b.domain ? `**Domain:** ${b.domain}` : "",
+    b.keywords.length ? `**Keywords:** ${b.keywords.join(", ")}` : "",
     "",
-    "## Background",
-    para(b.background, "No background given."),
+    "## Why this matters",
+    para(b.significance, "Not stated."),
+    "",
+    "## Prior work and what remains open",
+    "**What existing work has achieved:** " + para(b.prior_work, "Not stated."),
+    "**What remains genuinely open:** " + para(b.open_gap, "Not stated."),
     "",
     "## Research question",
     para(b.research_question, "No research question given."),
@@ -54,9 +91,15 @@ function renderMockBrief(b: BriefRecord): string {
     "## Objectives",
     num(b.objectives, "No explicit objectives — derive them from the research question."),
     "",
+    "## Evaluation protocol",
+    para(b.evaluation_protocol, "Not stated."),
+    "",
     "## Data",
     data,
-    b.data_notes ? `\n**Data notes:** ${b.data_notes}` : "",
+    "**Task definition:** " + para(b.task_definition, "Not stated."),
+    "**Existing results / baselines:** " + para(b.existing_results, "None recorded."),
+    "**Data access and permissions:** " + para(b.data_access, "None stated."),
+    b.data_notes ? `**Data notes:** ${b.data_notes}` : "",
     "",
     "## Constraints",
     para(b.constraints, "None stated."),
@@ -66,6 +109,12 @@ function renderMockBrief(b: BriefRecord): string {
     "",
     "## Deliverables",
     num(b.deliverables, "None stated — default to a written report under results/."),
+    "",
+    "## Project tree context",
+    b.node_id ? `**Registered as project node** \`${b.node_id}\`.` : "_Not registered on the project tree._",
+    "",
+    "## Harness",
+    "**Active version:** bootstrap harness (mock)",
     "",
     "## Working hypothesis",
     hyp,
@@ -299,6 +348,49 @@ export function createMockApi(): Api {
   const briefLinks = new Map<string, string>(); // hypothesis session id → brief id
   const sessionBriefs = new Map<string, BriefRecord>();
 
+  // ---- project tree (O2) mock: registry filled by registering briefs ----
+  const nodes: ProjectNodeView[] = [];
+  const edges: ProjectEdge[] = [];
+  const recs = new Map<string, AdvisorRecord>();
+  const running = new Set<string>();
+  const importsStore: ImportRecord[] = [];
+  const me = "u_alice";
+  const summaryOf = (n: ProjectNodeView): ProjectNodeSummary => {
+    const { statement: _s, links: _l, edges: _e, neighbours: _n, is_owner: _o, recommendation: _r, source: _src, revisions: _rev, ...rest } = n;
+    return rest;
+  };
+  const nodeView = (n: ProjectNodeView): ProjectNodeView => ({
+    ...clone(n),
+    edges: edges.filter((e) => (e.src === n.id || e.dst === n.id) && e.status !== "rejected"),
+    neighbours: edges
+      .filter((e) => (e.src === n.id || e.dst === n.id) && e.status !== "rejected")
+      .map((e) => ({ node: summaryOf(nodes.find((x) => x.id === (e.src === n.id ? e.dst : e.src))!), edge: e })),
+    recommendation: recs.get(n.id) ? { rec_id: recs.get(n.id)!.rec_id, status: recs.get(n.id)!.status, served_by: recs.get(n.id)!.served_by ?? undefined, harness_import: !!recs.get(n.id)!.harness_import, tool_imports: recs.get(n.id)!.tool_imports?.length ?? 0, related: recs.get(n.id)!.related_problems?.length ?? 0 } : null,
+  });
+  const cannedRec = (n: ProjectNodeView): AdvisorRecord => {
+    const other = nodes.find((x) => x.id !== n.id);
+    return {
+      rec_id: "rec-" + rid().slice(0, 6),
+      node_id: n.id,
+      status: "ready",
+      created: "2026-09-06 12:00:00",
+      served_by: "claude-fable-5 (mock)",
+      usage: { input_tokens: 4200, output_tokens: 610 },
+      validation_notes: [],
+      summary: other
+        ? `This problem sits next to “${other.title}” (${other.owner.display_name}). Reuse its evaluation pipeline rather than rebuilding it.`
+        : "No other problems are on the tree yet; nothing to reuse. Start from the base harness.",
+      related_problems: other ? [{ node_id: other.id, relation: "adjacent", confidence: 0.72, rationale: "Same measurement modality and overlapping evaluation protocol." }] : [],
+      harness_import: other
+        ? { recommended: true, owner: other.owner.user_id, owner_name: other.owner.display_name, version_id: "20260901-101500__peak-fitting", summary: "Add peak-fitting tool + data_analyst wiring", rationale: "The donor version carries a peak-fitting tool that matches question 4's task definition.", confidence: 0.66, mode_hint: "adopt", risks: ["the donor version predates the R17 compat gate (no tests/test_contract_compat.py); only the v0 smoke can be run"], alternatives: [], custom_tools: ["peak_fit"], from_node: other.id, from_node_title: other.title }
+        : null,
+      tool_imports: other ? [{ name: "peak_fit", owner: other.owner.user_id, owner_name: other.owner.display_name, version_id: "20260901-101500__peak-fitting", description: "Fits Lorentzian peaks and reports linewidths with bootstrap CIs.", rationale: "Directly implements the fit named in the evaluation protocol.", confidence: 0.8, role_wiring: ["data_analyst"] }] : [],
+      statement_feedback: { missing: mockCompleteness(briefs.find((b) => b.node_id === n.id) ?? ({ ...emptyBrief(), id: "", status: "draft", created: "", updated: "", hypothesis_session_id: null, hypothesis: null, session_id: null } as BriefRecord)).filter((q) => !q.filled).map((q) => ({ q: q.q, issue: `Not answered: ${q.missing.join(", ")}` })), notes: ["State the baseline per qubit, not per cooldown."], suggested_keywords: ["CPMG", "filter function"] },
+      hypothesis_seed: { suggested: true, why: "The open gap is mechanistic; competing hypotheses are meaningful." },
+      start_from_scratch_rationale: other ? "" : "The project tree is empty apart from this problem.",
+    };
+  };
+
   const mockStartHypothesis = (goal: string, n = 4, briefId?: string): Promise<HypSession> => {
     const hyps = MOCK_HYPS.slice(0, n).map((h, i) => ({ ...h, id: `h0_${i}`, round: 0 }));
     const rec = {
@@ -416,6 +508,21 @@ export function createMockApi(): Api {
     getReflection: (sid) => delay({ session_id: sid, reflection: "", proposals: [] }),
     reflect: () => delay({ ok: true }),
     answerHitl: (sid, _req, decision) => {
+      const imp = importsStore.find((i) => i.session_id === sid && i.status === "pending");
+      if (imp) {
+        imp.status = decision === "approve" ? "applied" : "rejected";
+        if (decision === "approve") {
+          imp.result = { version_id: "20260906-120100__import-" + (imp.kind === "harness" ? "peak-fitting" : "tools"), sha: imp.sha, tools: imp.tools };
+          const n = nodes.find((x) => x.id === imp.node_id);
+          if (n) { n.active_version = { id: imp.result.version_id, summary: imp.summary, imported_from: { owner: imp.owner, owner_name: imp.owner_name, version_id: imp.version_id } }; n.custom_tools = ["peak_fit"]; n.links.custom_tools = ["peak_fit"]; }
+        }
+        pending[sid] = [];
+        const s0 = find(sid);
+        if (s0) { s0.blocked = false; s0.last_kind = decision === "approve" ? "import.applied" : "import.rejected"; }
+        push(sid, ev(rid(), nextTs().slice(11), "human", "hitl.answer", { decision }));
+        push(sid, ev(rid(), nextTs().slice(11), "system", decision === "approve" ? "import.applied" : "import.rejected", { import_id: imp.id, version: imp.result?.version_id }));
+        return delay({ ok: true });
+      }
       const s = find(sid);
       pending[sid] = [];
       if (s) {
@@ -566,7 +673,17 @@ export function createMockApi(): Api {
       const missing = (["title", "research_question"] as const).filter((f) => !rec[f].trim());
       const text = renderMockBrief(rec);
       const size = new TextEncoder().encode(text).length;
-      return delay({ text, missing, data_problems: [], size_bytes: size, max_bytes: 100_000, too_large: size > 100_000 });
+      return delay({
+        text,
+        missing,
+        data_problems: [],
+        size_bytes: size,
+        max_bytes: 100_000,
+        too_large: size > 100_000,
+        missing_for_registration: REGISTRATION_FIELDS.filter((f) => !rec[f].trim()),
+        pending_imports: importsStore.filter((i) => i.status === "pending").map((i) => i.id),
+        completeness: mockCompleteness(rec),
+      });
     },
     briefHypotheses: async (bid, n = 4) => {
       const rec = briefs.find((b) => b.id === bid)!;
@@ -595,5 +712,93 @@ export function createMockApi(): Api {
       if (!rec) return Promise.reject(new Error("404"));
       return delay({ ...clone(rec), text: renderMockBrief(rec) });
     },
+    downloadLibrary: async () => {},
+
+    // ---- project tree + advisor + imports (O2) ----
+    registerBrief: (bid, visibility) => {
+      const rec = briefs.find((b) => b.id === bid)!;
+      if (visibility) rec.visibility = visibility;
+      let n = nodes.find((x) => x.id === rec.node_id);
+      const st = { title: rec.title, domain: rec.domain, research_question: rec.research_question, objectives: rec.objectives, significance: rec.significance, prior_work: rec.prior_work, open_gap: rec.open_gap, evaluation_protocol: rec.evaluation_protocol, success_criteria: rec.success_criteria, task_definition: rec.task_definition, existing_results: rec.existing_results, data_access: rec.data_access, data_notes: rec.data_notes, keywords: rec.keywords, data: rec.data.map((d) => ({ path: d.path, description: d.description })) };
+      const changed = !n || JSON.stringify(n.statement) !== JSON.stringify(st);
+      if (!n) {
+        n = { id: "p-20260906-" + rid().slice(0, 6), title: rec.title, research_question: rec.research_question, domain: rec.domain, keywords: rec.keywords, owner: { user_id: me, display_name: "alice" }, visibility: rec.visibility, status: "registered", parent_node: rec.parent_node, created: "2026-09-06 12:00:00", updated: "2026-09-06 12:00:00", session_count: 0, outcome: "", active_version: null, version_count: 0, custom_tools: [], dataset_count: rec.data.length, statement: st, revisions: 1, links: { sessions: [], harness_versions: [], tools: ["fs_read", "py_exec"], custom_tools: [], roles: ["supervisor", "data_analyst", "generalist_researcher"], datasets: [], outcomes: [] }, edges: [], neighbours: [], is_owner: true };
+        nodes.push(n);
+        rec.node_id = n.id;
+        // deterministic adjacency: any other node with a shared keyword
+        for (const o of nodes) {
+          if (o.id === n.id) continue;
+          const shared = o.keywords.filter((k) => rec.keywords.map((x) => x.toLowerCase()).includes(k.toLowerCase()));
+          if (shared.length) edges.push({ id: rid(), src: n.id, dst: o.id, type: "adjacent", weight: Math.min(1, 0.3 + 0.2 * shared.length), source: "keyword", status: "proposed", rationale: "Shared terms: " + shared.join(", ") });
+        }
+        if (rec.parent_node && nodes.find((x) => x.id === rec.parent_node)) edges.push({ id: rid(), src: n.id, dst: rec.parent_node, type: "subproblem", weight: 1, source: "human", status: "confirmed", rationale: "Started as a subproblem of the parent." });
+      } else {
+        Object.assign(n, { title: rec.title, research_question: rec.research_question, domain: rec.domain, keywords: rec.keywords, visibility: rec.visibility, statement: st, revisions: changed ? n.revisions + 1 : n.revisions });
+      }
+      const node = n;
+      if (changed || !recs.has(node.id)) {
+        running.add(node.id);
+        setTimeout(() => { recs.set(node.id, cannedRec(node)); running.delete(node.id); }, 1800);
+      }
+      return delay({ node: nodeView(node), changed, advisor_started: changed, brief: clone(rec) });
+    },
+    projectTree: () => delay({ nodes: nodes.map(summaryOf), edges: edges.filter((e) => e.status !== "rejected"), me }),
+    getProject: (pid) => {
+      const n = nodes.find((x) => x.id === pid);
+      return n ? delay(nodeView(n)) : Promise.reject(new Error("404"));
+    },
+    projectNear: (pid) => {
+      const n = nodes.find((x) => x.id === pid)!;
+      const v = nodeView(n);
+      return delay({ self: summaryOf(n), neighbours: v.neighbours, edges: v.edges });
+    },
+    patchProject: (pid, patch) => {
+      const n = nodes.find((x) => x.id === pid)!;
+      if (patch.status) n.status = patch.status as ProjectNodeView["status"];
+      if (patch.visibility) n.visibility = patch.visibility;
+      if (patch.keywords) { n.keywords = patch.keywords; n.statement.keywords = patch.keywords; }
+      return delay(nodeView(n));
+    },
+    declareEdge: (pid, dst, type, rationale) => {
+      edges.push({ id: rid(), src: pid, dst, type: type as ProjectEdge["type"], weight: 1, source: "human", status: "confirmed", rationale });
+      return delay(nodeView(nodes.find((x) => x.id === pid)!));
+    },
+    decideEdge: (pid, eid, decision) => {
+      const e = edges.find((x) => x.id === eid);
+      if (e) e.status = decision === "confirm" ? "confirmed" : "rejected";
+      return delay(nodeView(nodes.find((x) => x.id === pid)!));
+    },
+    spawnBrief: (pid) => {
+      const n = nodes.find((x) => x.id === pid)!;
+      const rec: BriefRecord = { ...emptyBrief(), domain: n.domain, keywords: [...n.keywords], prior_work: `Derived from "${n.title}" (${n.id}). That problem asks: ${n.research_question}`, parent_node: n.id, visibility: n.visibility, id: `brief-${briefs.length + 1}`, status: "draft", created: "2026-09-06 12:00:00", updated: "2026-09-06 12:00:00", hypothesis_session_id: null, hypothesis: null, session_id: null };
+      briefs.unshift(rec);
+      return delay(clone(rec));
+    },
+    advise: (pid) => {
+      const n = nodes.find((x) => x.id === pid)!;
+      running.add(pid);
+      setTimeout(() => { recs.set(pid, cannedRec(n)); running.delete(pid); }, 1800);
+      return delay({ ok: true, running: true, started: true });
+    },
+    getRecommendations: (pid) => delay({ running: running.has(pid), latest: recs.get(pid) ? clone(recs.get(pid)!) : null, pending_imports: importsStore.filter((i) => i.status === "pending"), imports: importsStore.filter((i) => i.node_id === pid) }, 120),
+    createImport: (pid, body) => {
+      const iid = "imp-20260906-120000-" + rid().slice(0, 6);
+      const sid = `evo-import-${iid}`;
+      const rec: ImportRecord = { id: iid, kind: body.kind, mode: body.kind === "harness" ? body.mode ?? "adopt" : undefined, user_id: me, owner: body.owner, owner_name: nodes.find((n) => n.owner.user_id === body.owner)?.owner.display_name ?? "colleague", version_id: body.version_id, sha: "b7f919eda3c7", summary: body.kind === "harness" ? "Add peak-fitting tool + data_analyst wiring" : (body.tools ?? []).join(", "), tools: body.tools, roles: body.roles, node_id: pid, session_id: sid, request_id: rid(), status: "pending", risks: ["the donor version predates the R17 compat gate (no tests/test_contract_compat.py); only the v0 smoke can be run"], smoke: { ran: true, ok: true, tests: ["tests/test_smoke_v0.py"] }, diffstat: " roles/subagents/data_analyst.yaml | 1 +\n tools/peak_fit/__init__.py        | 0\n tools/peak_fit/server.py          | 142 ++++\n 3 files changed, 143 insertions(+)", diff_preview: "diff --git a/roles/subagents/data_analyst.yaml b/roles/subagents/data_analyst.yaml\n@@ -9,3 +9,4 @@ tools:\n   - longjob\n   - ocr\n   - latex_compile\n+  - peak_fit", rollback_to: { sha: "e90dd34", version_id: null }, created: "2026-09-06 12:01:00" };
+      importsStore.push(rec);
+      pending[sid] = [{ request_id: rec.request_id!, session_id: sid, requester: "project-tree advisor", title: body.kind === "harness" ? `Import ${rec.owner_name}'s harness version: ${rec.summary}` : `Import tools ${rec.summary} from ${rec.owner_name}`, action: body.kind === "harness" ? `Import ${rec.owner_name}'s harness version and switch to it.` : `Add ${rec.summary} to your harness.`, detail: `**Smoke + compat gate:** passed in a temporary worktree ✓\n\n\`\`\`\n${rec.diffstat}\n\`\`\``, detailMarkdown: true, meta: `${rec.version_id} · ${rec.mode ?? "tool"} · smoke ✓` }];
+      sessions.unshift({ session_id: sid, task: `import ${rec.summary}`, running: false, blocked: true, last_kind: "hitl.pending" });
+      events[sid] = [ev(rid(), nextTs().slice(11), "human", "import.requested", { import_id: iid }), ev(rid(), nextTs().slice(11), "system", "hitl.pending", { summary: pending[sid][0].title })];
+      return delay(clone(rec), 900);
+    },
+    getImport: (iid) => delay(clone(importsStore.find((i) => i.id === iid)!)),
+    listImports: () => delay(clone(importsStore)),
+    evolveImport: (iid) => {
+      const rec = importsStore.find((i) => i.id === iid)!;
+      rec.status = "evolving";
+      rec.fallback_session = "evo-mock-1";
+      return delay({ ok: true, session_id: "evo-mock-1", import: clone(rec) });
+    },
+    shareVersion: () => delay({ versions: [], active: null }),
   };
 }

@@ -111,7 +111,7 @@ function FileRow({ node, depth, action }: { node: TreeNode; depth: number; actio
 }
 
 export default function FilesPanel() {
-  const { files, loadFiles, downloadFile, library, libraryHealth, loadLibrary, uploadFiles, deleteLibrary } = useApp();
+  const { files, loadFiles, downloadFile, library, libraryHealth, loadLibrary, uploadFiles, deleteLibrary, downloadLibrary } = useApp();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dirInputRef = useRef<HTMLInputElement>(null);
 
@@ -143,10 +143,16 @@ export default function FilesPanel() {
       get
     </button>
   );
+  // O2: every library file is retrievable at any time (get) — plus delete.
   const delAction = (path: string) => (
-    <button onClick={() => void deleteLibrary(path)} style={{ fontSize: 12, color: "var(--lo)", padding: "3px 7px", flex: "0 0 auto" }}>
-      ✕
-    </button>
+    <span style={{ display: "flex", alignItems: "center", gap: 4, flex: "0 0 auto" }}>
+      <button onClick={() => downloadLibrary(path)} title="Download" style={{ fontSize: 11, color: "var(--accent)", fontFamily: "var(--mono)", padding: "4px 9px", borderRadius: 6, border: "1px solid var(--border)" }}>
+        get
+      </button>
+      <button onClick={() => void deleteLibrary(path)} title="Delete from the library" style={{ fontSize: 12, color: "var(--lo)", padding: "3px 7px" }}>
+        ✕
+      </button>
+    </span>
   );
 
   return (

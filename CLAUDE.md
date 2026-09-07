@@ -79,6 +79,21 @@ human ──HTTP──▶ api/server.py ──spawns──▶ research/runtime.p
   message. The brief is composed **API-side**, not in `research/runtime.py`,
   because per-user harness roots are frozen forks (see below). Plan:
   [docs/plans/O1-onboarding.md](docs/plans/O1-onboarding.md).
+- **Onboarding system (O2).** The brief is the five-question statement
+  (definition · why it matters · prior work + open gap · objective evaluation
+  · exact data/task/results/permissions). Questions 1–3 register the problem on
+  the **org-wide project tree** (`api/projects.py`, `state/projects/`, routes
+  under `/projects/*`), a platform registry outside every tenant root with
+  BM25 adjacency + dataset/method edges. A **background advisor**
+  (`api/advisor.py`, prompt `api/prompts/advisor.md`, Fable → Opus via
+  `api/llm.py`) reads the tree and recommends a colleague's evolved harness
+  version and tools; **imports** (`api/imports.py`) fetch the donor's
+  `ver/<id>` tag into the importer's repo, run the smoke + compat gate in a
+  worktree, and open a HITL request in `evo-import-<id>` — the human approves
+  through the normal HITL route; adopt = R17 switch to the fetched commit,
+  merge/tool = fast-forward child version. Cross-tenant reads happen only in
+  `api/` and surface bounded summaries; a donor repo is never written. Plan:
+  [docs/plans/O2-project-tree-advisor.md](docs/plans/O2-project-tree-advisor.md).
 
 **Per-user harness roots are frozen forks.** `api/tenancy.py:ensure_user_root`
 copies `scaffold/`, `research/`, `evolution/`, `tools/`, `roles/`, `prompts/`

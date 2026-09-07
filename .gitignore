@@ -9,6 +9,8 @@ CREDENTIALS.local.md
 *.local.md
 
 /state/
+# per-user harness root marker (api/tenancy.py); never part of a version
+.coscientist-user-root
 worktrees/
 researcher_data/
 !researcher_data/.gitkeep
