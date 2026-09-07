@@ -21,7 +21,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from scaffold import archive, contract, sandbox, settings
 from scaffold._atomic import append_jsonl, read_json, write_json
 
-from . import evo_store, llm
+from . import evo_store, llm, llm_sdk
 from . import goals as _goals
 from . import judge as _judge
 from . import onboarding as _onboarding
@@ -1605,7 +1605,7 @@ async def _launch_brief(bid: str, req: schemas.LaunchBriefRequest, ctx: UserCont
 # automatic mode); the outcome and later adoption feed the next planner run.
 # See docs/plans/R19-guided-evolution-search.md.
 
-_LLM_COMPLETE = llm.complete          # monkeypatched by tests (offline)
+_LLM_COMPLETE = llm_sdk.complete_with_sdk_fallback   # direct API, then the Agent SDK; monkeypatched by tests (offline)
 _PLAN_TASKS: set[asyncio.Task] = set()
 _GATE_WATCHERS: set[asyncio.Task] = set()
 
