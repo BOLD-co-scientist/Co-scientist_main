@@ -413,8 +413,17 @@ export function toVM(e: Ev, prev?: Ev, ctx?: VMCtx): EventVM {
     return { ...base, label: "Problem brief", body: firstStr("text") ?? s("title") ?? "" };
   // The human's evolution command — echo it as their message bubble so the
   // conversation opens with what was asked, not a bare spine line.
-  if (e.kind === "evolution.requested")
-    return { ...base, tone: "human", label: "Evolution command", body: s("command") ?? "" };
+  if (e.kind === "evolution.requested") {
+    // R19: automatic mode emits this with actor "judge"; only a human-issued
+    // command renders as the human's own message.
+    const byHuman = e.actor === "human";
+    return {
+      ...base,
+      tone: byHuman ? "human" : "agent",
+      label: byHuman ? "Evolution command" : "Evolution command (launched by the judge)",
+      body: s("command") ?? "",
+    };
+  }
   if (e.kind === "research.complete")
     return { ...base, tone: "ok", label: "Research complete", body: firstStr("summary", "text") ?? "" };
 

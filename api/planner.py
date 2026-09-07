@@ -76,26 +76,44 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
-def acquire(state: Path, bid: str) -> bool:
+def acquire(state: Path, bid: str, token: str) -> bool:
+    """Take the per-brief planner lock, stamped with this run's unique token.
+
+    The holder is another asyncio task in THIS process, so a pid check says
+    nothing (os.getpid() is always alive) — the token is what makes release
+    safe: a run that lost the lock to a stale takeover must not delete the new
+    holder's lock on its way out.
+    """
     p = _lock_path(state, bid)
     rec = read_json(p, default=None)
     if isinstance(rec, dict):
+        held_here = int(rec.get("pid", 0) or 0) == os.getpid()
         fresh = (time.time() - float(rec.get("ts", 0))) < LOCK_STALE_S
-        if fresh and _pid_alive(int(rec.get("pid", 0) or 0)):
+        if fresh and (held_here or _pid_alive(int(rec.get("pid", 0) or 0))):
             return False
-    write_json(p, {"pid": os.getpid(), "ts": time.time()})
+    write_json(p, {"pid": os.getpid(), "ts": time.time(), "token": token})
     return True
 
 
-def release(state: Path, bid: str) -> None:
-    _lock_path(state, bid).unlink(missing_ok=True)
+def release(state: Path, bid: str, token: str | None = None) -> None:
+    """Release only if we still hold it (token match), so a run whose lock was
+    taken over after going stale cannot unlock the run that replaced it."""
+    p = _lock_path(state, bid)
+    if token is not None:
+        rec = read_json(p, default=None)
+        if isinstance(rec, dict) and rec.get("token") not in (None, token):
+            return
+    p.unlink(missing_ok=True)
 
 
 def is_running(state: Path, bid: str) -> bool:
     rec = read_json(_lock_path(state, bid), default=None)
     if not isinstance(rec, dict):
         return False
-    return (time.time() - float(rec.get("ts", 0))) < LOCK_STALE_S and _pid_alive(int(rec.get("pid", 0) or 0))
+    if (time.time() - float(rec.get("ts", 0))) >= LOCK_STALE_S:
+        return False
+    pid = int(rec.get("pid", 0) or 0)
+    return pid == os.getpid() or _pid_alive(pid)
 
 
 # ---------- inputs ----------
@@ -207,8 +225,20 @@ def tree_text(root: Path, state: Path) -> str:
 
 
 def platform_inventory(platform_root: Path | None) -> str:
+    """What the planner may propose changing in the SHARED platform (ui3/ + api/).
+
+    ``None`` means platform evolution is disabled on this deployment; say so in
+    the strongest terms, because a platform proposal would be judged, picked and
+    only THEN refused with a 501 — burning a judge call and polluting the eval
+    folder with a decision the researcher could not act on.
+    """
     if not platform_root:
-        return "(platform not editable from here)"
+        return (
+            "PLATFORM EVOLUTION IS DISABLED on this deployment: the shared UI and API cannot be "
+            "changed by an evolution right now. Do NOT emit any proposal with scope \"platform\". "
+            "If the researcher needs a visual capability, propose a HARNESS tool that writes a "
+            "self-contained artifact (an HTML or PNG file) into results/ instead."
+        )
     comps = platform_root / "ui3" / "src" / "components"
     api_dir = platform_root / "api"
     parts: list[str] = []
@@ -245,6 +275,22 @@ def eval_folder_text(state: Path, bid: str) -> str:
     hist = _judge.history_block(decs, props)
     open_ = [p for p in evo_store.list_proposals(state, brief_id=bid, statuses=("proposed", "queued", "implementing"))]
     lines = ["Decision history (all problems of this researcher):", hist]
+    # What each attempt actually PRODUCED — HyperAgents' eval folder is the record
+    # of outcomes, not only of choices. Without this an evolution that ended
+    # without a merge looks identical to one never tried, and gets re-proposed.
+    outcomes = [p for p in evo_store.list_proposals(state, brief_id=bid) if p.get("status") in ("merged", "rejected", "ended", "declined")]
+    if outcomes:
+        lines.append("")
+        lines.append("Outcomes of past attempts on this problem (do not repeat a failed one without saying what changed):")
+        for p in outcomes[-20:]:
+            bits = [f"- [{p.get('status')}] {p.get('title')} ({p.get('scope')}/{p.get('direction')})"]
+            if p.get("version_id"):
+                bits.append(f"became version {p['version_id']}")
+            if p.get("error"):
+                bits.append(f"failed: {p['error']}")
+            if (p.get("human") or {}).get("note"):
+                bits.append(f"researcher said: {p['human']['note']}")
+            lines.append(" — ".join(bits))
     if open_:
         lines.append("")
         lines.append("Open proposals for this problem (do not duplicate):")
@@ -276,8 +322,13 @@ def normalize_proposal(raw: dict, ledger: dict) -> dict | None:
     if len(title) < 4 or len(command) < 20:
         return None
     scope = str(raw.get("scope", "")).strip().lower()
-    if scope not in ("harness", "platform"):
-        scope = "platform" if _PLATFORM_HINT.search(command) else "harness"
+    # A command that names ui3/ or api/ IS a platform change, whatever the model
+    # labelled it: launching it as a harness evolution would run the agent in a
+    # tenant worktree where those paths do not exist and the guard blocks them.
+    if _PLATFORM_HINT.search(command):
+        scope = "platform"
+    elif scope not in ("harness", "platform"):
+        scope = "harness"
     direction = str(raw.get("direction", "")).strip().lower()
     if direction not in DIRECTIONS:
         direction = "ui" if scope == "platform" else "tools"
@@ -315,12 +366,15 @@ async def run(
     bid = evo_store.safe_id(bid) or ""
     if not bid:
         return PlanResult(brief_id=bid, status="error", error="invalid brief id")
-    if not acquire(state, bid):
+    run_id = evo_store.new_id("run")
+    if not acquire(state, bid, run_id):
+        # A background trigger that loses the race used to vanish without a
+        # trace; record it so the human can see why no new plan appeared.
+        evo_store.event(state, "planner.skipped", brief_id=bid, trigger=trigger, reason="a planner run is already in progress for this brief")
         return PlanResult(brief_id=bid, status="busy", error="a planner run is already in progress for this brief")
     complete = complete or llm.complete
     judge = judge or _judge.Judge()
     mode = mode or evo_store.load_settings(state)["mode"]
-    run_id = evo_store.new_id("run")
     evo_store.event(state, "planner.started", run_id=run_id, brief_id=bid, trigger=trigger)
     try:
         return await _run_locked(ctx, bid, run_id, trigger=trigger, mode=mode, complete=complete, judge=judge, api_key=api_key, platform_root=platform_root)
@@ -329,7 +383,7 @@ async def run(
         evo_store.save_run(state, {"id": run_id, "brief_id": bid, "trigger": trigger, "created": evo_store.now_str(), "created_ts": time.time(), "error": f"{e.__class__.__name__}: {e}"})
         return PlanResult(brief_id=bid, status="error", run_id=run_id, error=f"{e.__class__.__name__}: {str(e)[:300]}")
     finally:
-        release(state, bid)
+        release(state, bid, run_id)
 
 
 async def _run_locked(ctx: Any, bid: str, run_id: str, *, trigger, mode, complete, judge, api_key, platform_root) -> PlanResult:
@@ -374,6 +428,13 @@ async def _run_locked(ctx: Any, bid: str, run_id: str, *, trigger, mode, complet
         return PlanResult(brief_id=bid, status="error", run_id=run_id, served_by=res.served_by, error=run_rec["error"])
 
     data = llm.parse_json_object(res.text)
+    if not data:
+        # Prose or malformed JSON. Distinguish it from a legitimate "nothing to
+        # propose" (which is a valid, meaningful planner answer).
+        run_rec["error"] = "planner reply was not JSON"
+        evo_store.save_run(state, run_rec)
+        evo_store.event(state, "planner.failed", run_id=run_id, brief_id=bid, error=run_rec["error"])
+        return PlanResult(brief_id=bid, status="error", run_id=run_id, served_by=res.served_by, error=run_rec["error"])
     phase = data.get("phase") if isinstance(data.get("phase"), dict) else {}
     drift_opened = False
     if phase:
@@ -385,7 +446,13 @@ async def _run_locked(ctx: Any, bid: str, run_id: str, *, trigger, mode, complet
     # Validate + dedupe against everything already recorded for this brief.
     active_fps = {p.get("fingerprint") for p in existing if p.get("status") in ("proposed", "queued", "implementing", "merged")}
     declined_fps = {p.get("fingerprint") for p in existing if p.get("status") in ("declined", "rejected")}
-    seen_titles = {_norm_title(p.get("title", "")) for p in existing if p.get("status") in ("proposed", "queued", "implementing")}
+    # Titles of DECLINED proposals count too: an exact-fingerprint check alone
+    # let a re-worded command re-propose what the human already turned down.
+    seen_titles = {
+        _norm_title(p.get("title", ""))
+        for p in existing
+        if p.get("status") in ("proposed", "queued", "implementing", "declined", "rejected", "merged")
+    }
     parent_version = None
     try:
         parent_version = archive.list_versions(root).get("active")
@@ -420,6 +487,21 @@ async def _run_locked(ctx: Any, bid: str, run_id: str, *, trigger, mode, complet
             evo_store.record_decision(state, proposal_id=rec["id"], actor="judge", stage="proposal", decision=verdict.verdict, note=verdict.why, score=verdict.score, served_by=verdict.served_by)
             evo_store.event(state, "judge.verdict", proposal_id=rec["id"], stage="proposal", verdict=verdict.verdict, score=verdict.score, why=verdict.why, recommendation=verdict.recommendation)
 
+    # The run held only an in-memory copy of the ledger across two slow model
+    # calls. Re-read it and merge ONLY the planner-owned fields, so a researcher
+    # edit that landed meanwhile (reorder, current, hints, drift answer) survives.
+    fresh = evo_store.load_goals(state, bid)
+    if isinstance(fresh, dict) and fresh.get("subgoals") is not None:
+        fresh["inferred_current"] = ledger.get("inferred_current")
+        fresh["phase"] = ledger.get("phase")
+        if drift_opened and ledger.get("drift"):
+            q = ledger["drift"]
+            live_ids = {sg.get("id") for sg in fresh.get("subgoals", [])}
+            if q.get("declared_current") == fresh.get("current") and (q.get("inferred_current") in live_ids or q.get("inferred_current") is None):
+                fresh["drift"] = q
+            else:
+                drift_opened = False  # the plan moved under the question; drop it
+        ledger = fresh
     _goals.refresh_wishlist_status(ledger, inv, existing + new)
     evo_store.save_goals(state, ledger)
     run_rec.update({"proposal_ids": [p["id"] for p in new], "phase": ledger.get("phase"), "drift_opened": drift_opened})

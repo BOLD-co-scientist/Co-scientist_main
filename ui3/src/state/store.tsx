@@ -100,7 +100,8 @@ interface AppCtx {
   evoRunning: boolean;
   evolutionCommand: string;
   setEvolutionCommand: (command: string) => void;
-  startEvolution: (command: string, base?: string, proposalId?: string) => Promise<void>;
+  /** Returns true when the evolution actually started (false → see sendNotice). */
+  startEvolution: (command: string, base?: string, proposalId?: string, scope?: string) => Promise<boolean>;
   answerEvo: (requestId: string, decision: "approve" | "reject", note?: string) => Promise<void>;
   // R19: adopt an evolution session the server launched (a picked or judge-approved
   // proposal) as the drawer's channel; a composer seed may carry the proposal it
@@ -467,7 +468,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         (e) => {
           if (evoActiveIdRef.current !== sid) return;
           setEvoEvents((prev) => (prev.some((p) => p.id === e.id) ? prev : [...prev, e]));
-          if (NOTABLE.has(e.kind) || e.kind.startsWith("evolution") || e.kind.startsWith("skill")) {
+          // R19: a judge review/answer changes what the approval card shows,
+          // so it must refresh the pending list too.
+          if (NOTABLE.has(e.kind) || e.kind.startsWith("evolution") || e.kind.startsWith("skill") || e.kind.startsWith("judge") || e.kind === "hitl.auto_answer") {
             void refreshSessions();
             void refreshEvoPending(sid);
           }
@@ -762,14 +765,27 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     // active tip. Either way the new evo-* session is adopted as the drawer's
     // channel — it is NEVER routed into the research session rail.
     // `proposalId` (R19): the planner proposal this command implements.
-    async (command: string, base?: string, proposalId?: string) => {
+    async (command: string, base?: string, proposalId?: string, scope?: string) => {
       const cmd = command.trim();
-      if (!cmd) return;
+      if (!cmd) return false;
       try {
-        const { session_id } = await api.spawnEvolution(cmd, base, proposalId);
+        const { session_id } = await api.spawnEvolution(cmd, base, proposalId, scope);
         await adoptEvolution(session_id);
-      } catch {
-        /* ignore */
+        setEvolutionProposalId(null);
+        return true;
+      } catch (e) {
+        // The R19 routes reject for real reasons the human must see (409 an
+        // evolution is already running / the proposal is already decided, 404
+        // unknown proposal, 501 platform scope disabled). Swallowing these left
+        // the composer looking like it had worked while wiping the text.
+        const status = e instanceof HttpError ? e.status : 0;
+        setSendNotice(
+          status === 409 ? "An evolution is already running — wait for it to finish."
+          : status === 501 ? "Platform-scope evolutions are disabled on this deployment."
+          : status === 404 ? "That proposal no longer exists."
+          : "Could not start the evolution.",
+        );
+        return false;
       }
     },
     [api, adoptEvolution],

@@ -265,6 +265,7 @@ const MOCK_PROPOSALS: ProposalList = {
   running: false,
   mode: "manual",
   evolution_running: false,
+  platform_evolution: false,
 };
 
 export function createMockApi(): Api {
@@ -462,8 +463,8 @@ export function createMockApi(): Api {
     activateVersion: (_id) => delay({ versions: [], active: null }),
 
     // ---- R19 guided evolution search (mock) ----
-    evoMode: () => delay({ mode: MOCK_PROPOSALS.mode, judge: { available: true, model: "mock-judge" } }),
-    setEvoMode: (mode) => { MOCK_PROPOSALS.mode = mode; return delay({ mode, judge: { available: true, model: "mock-judge" } }); },
+    evoMode: () => delay({ mode: MOCK_PROPOSALS.mode, judge: { available: true, model: "mock-judge" }, platform_evolution: false }),
+    setEvoMode: (mode) => { MOCK_PROPOSALS.mode = mode; return delay({ mode, judge: { available: true, model: "mock-judge" }, platform_evolution: false }); },
     judgeInfo: () => delay({ available: true, model: "mock-judge", calibration: { n_proposals: 2, gate1: { pairs: 1, agreement: 1, judge_accept_rate: 1, human_accept_rate: 1, disagreements: [] }, gate2: { pairs: 0, agreement: null, judge_accept_rate: null, human_accept_rate: null, disagreements: [] } } }),
     getGoals: (bid) => delay(mockLedger(bid)),
     deriveGoals: (bid) => delay(mockLedger(bid), 900),

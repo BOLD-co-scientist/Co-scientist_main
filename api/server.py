@@ -71,6 +71,9 @@ def _runtime_env(ctx: UserContext) -> dict[str, str]:
     user_key = _read_user_agent_key(ctx)
     if user_key:
         env["ANTHROPIC_API_KEY"] = user_key
+    # R19: the judge's credential is PLATFORM-only. The tenant subprocess (whose
+    # agent can run `echo $VAR` through bash_ro) must never inherit it.
+    env.pop("COSCIENTIST_JUDGE_OPENAI_API_KEY", None)
     return env
 
 
@@ -1127,16 +1130,26 @@ async def start_evolution(req: schemas.StartEvolutionRequest, ctx: UserContext =
     if _evo_running(ctx):
         raise HTTPException(409, "an evolution is already running; wait for it to finish (one at a time per harness)")
     proposal = None
+    scope = req.scope or "harness"
     if req.proposal_id:
         proposal = evo_store.load_proposal(ctx.state, req.proposal_id)
         if proposal is None:
             raise HTTPException(404, "unknown proposal")
         if proposal.get("status") not in ("proposed", "queued"):
             raise HTTPException(409, f"proposal is already {proposal.get('status')}")
+        # The proposal's own scope wins: a platform proposal edited through this
+        # route must not silently become a harness evolution because the client
+        # left `scope` at its default.
+        scope = proposal.get("scope") or scope
+    if scope == "platform" and not _platform_evolution_available():
+        # Refuse BEFORE recording a decision, so a click on something the
+        # deployment cannot run does not pollute the eval folder / calibration.
+        raise HTTPException(501, "platform-scope evolutions are disabled on this deployment (COSCIENTIST_PLATFORM_EVOLUTION)")
+    if proposal is not None:
         proposal["human"] = {"decision": "pick", "note": "", "at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "edited": proposal.get("command") != command}
         evo_store.save_proposal(ctx.state, proposal)
         evo_store.record_decision(ctx.state, proposal_id=proposal["id"], actor="human", stage="proposal", decision="pick", note="edited command" if proposal["human"]["edited"] else "")
-    sid = await _launch_evolution(ctx, command, getattr(req, "base", None), proposal=proposal, scope=(req.scope or "harness"), actor="human")
+    sid = await _launch_evolution(ctx, command, getattr(req, "base", None), proposal=proposal, scope=scope, actor="human")
     return schemas.StartEvolutionResponse(session_id=sid, command=command)
 # ---------- hypothesis engine (interim: parallel-set generation via Fable) ----------
 #
@@ -1608,6 +1621,14 @@ async def _launch_brief(bid: str, req: schemas.LaunchBriefRequest, ctx: UserCont
 _LLM_COMPLETE = llm_sdk.complete_with_sdk_fallback   # direct API, then the Agent SDK; monkeypatched by tests (offline)
 _PLAN_TASKS: set[asyncio.Task] = set()
 _GATE_WATCHERS: set[asyncio.Task] = set()
+# One evolution per tenant. `_evo_running` is a check followed by an await that
+# creates the subprocess, so two concurrent decides (or a decide racing the queue
+# drain) could both pass the check; this serialises the whole check-and-launch.
+_LAUNCH_LOCKS: dict[str, asyncio.Lock] = {}
+
+
+def _launch_lock(ctx: UserContext) -> asyncio.Lock:
+    return _LAUNCH_LOCKS.setdefault(ctx.user.user_id, asyncio.Lock())
 
 
 def _judge_dir(ctx: UserContext, sid: str) -> Path:
@@ -1725,11 +1746,15 @@ async def _launch_next_queued(ctx: UserContext) -> str | None:
     if _evo_running(ctx) or _is_switch_locked(ctx):
         return None
     queued = evo_store.list_proposals(ctx.state, statuses=("queued",))
+    if evo_store.load_settings(ctx.state)["mode"] != "automatic":
+        # Manual mode: the human decides. Only proposals a HUMAN queued may
+        # drain; judge-queued ones wait until automatic mode is on again.
+        queued = [p for p in queued if (p.get("human") or {}).get("decision")]
     if not queued:
         return None
     queued.sort(key=lambda p: (-float((p.get("judge") or {}).get("score") or 0.0), p.get("created") or ""))
     prop = queued[0]
-    actor = (prop.get("human") or {}).get("decision") and "human" or "judge"
+    actor = "human" if (prop.get("human") or {}).get("decision") else "judge"
     try:
         return await _launch_proposal(ctx, prop, actor=actor, why=((prop.get("judge") or {}).get("why") if actor == "judge" else None))
     except HTTPException as e:
@@ -1743,14 +1768,21 @@ async def _auto_launch(ctx: UserContext, brief_id: str | None = None) -> None:
     the rest queue), and the judge's reason is written where the human sees it."""
     if evo_store.load_settings(ctx.state)["mode"] != "automatic":
         return
-    cands = [
-        p for p in evo_store.list_proposals(ctx.state, brief_id=brief_id, statuses=("proposed",))
-        if (p.get("judge") or {}).get("verdict") == "approve"
-    ]
+    fresh = evo_store.list_proposals(ctx.state, brief_id=brief_id, statuses=("proposed",))
+    # In automatic mode the judge is the decider at gate 1, so its decline is
+    # recorded as one: the proposal leaves the open list instead of lingering
+    # with a live Run button that contradicts the mode.
+    for p in fresh:
+        j = p.get("judge") or {}
+        if j.get("verdict") != "decline":
+            continue
+        evo_store.set_status(ctx.state, p, "declined", declined_by="judge")
+        evo_store.event(ctx.state, "proposal.auto_declined", proposal_id=p["id"], brief_id=p.get("brief_id"), title=p.get("title"), why=j.get("why", ""), score=j.get("score"))
+    cands = [p for p in fresh if (p.get("judge") or {}).get("verdict") == "approve"]
     cands.sort(key=lambda p: (-float((p.get("judge") or {}).get("score") or 0.0), p.get("created") or ""))
     for p in cands:
         j = p.get("judge") or {}
-        evo_store.set_status(ctx.state, p, "queued", auto=True)
+        evo_store.set_status(ctx.state, p, "queued", auto=True, queued_in_mode="automatic")
         evo_store.event(ctx.state, "proposal.auto_approved", proposal_id=p["id"], brief_id=p.get("brief_id"), title=p.get("title"), why=j.get("why", ""), score=j.get("score"), recommendation=j.get("recommendation", ""))
     await _launch_next_queued(ctx)
 
@@ -1765,7 +1797,8 @@ def _schedule_plan(ctx: UserContext, bid: str, *, trigger: str, delay: float = 0
                 await asyncio.sleep(delay)
             res = await _planner.run(
                 ctx, bid, trigger=trigger, judge=_judge_for(ctx), complete=_LLM_COMPLETE,
-                api_key=_read_user_agent_key(ctx), platform_root=settings.PLATFORM_REPO,
+                api_key=_read_user_agent_key(ctx),
+                platform_root=settings.PLATFORM_REPO if _platform_evolution_available() else None,
             )
             if res.status == "ok":
                 await _auto_launch(ctx, bid)
@@ -1797,7 +1830,11 @@ def _record_adoption(ctx: UserContext, sid: str) -> None:
             active = archive.list_versions(ctx.root).get("active") or "bootstrap"
         except Exception:  # noqa: BLE001
             active = "bootstrap"
-        evo_store.record_session_adoption(ctx.state, active, counts, sid)
+        # Keyed per TURN: _monitor_runtime fires once per completed turn and a
+        # session (R10) has many, so deduping on the session id alone hid every
+        # turn after the first from the planner's adoption signal.
+        turns = sum(1 for e in _tail_events(ctx, sid) if e.get("kind") == "research.complete")
+        evo_store.record_session_adoption(ctx.state, active, counts, f"{sid}#turn{turns}")
     except Exception:  # noqa: BLE001
         pass
 
@@ -1841,6 +1878,17 @@ async def _judge_merge_request(ctx: UserContext, sid: str, rid: str, rec: dict, 
         evo_store.record_decision(ctx.state, proposal_id=prop["id"], actor="judge", stage="merge", decision="approve" if verdict.approved else "reject", note=verdict.why, score=verdict.score, served_by=verdict.served_by)
     if mode != "automatic" or not verdict.ok:
         return
+    # CLAUDE.md: changes to scaffold/, evolution/, pyproject.toml and the
+    # Dockerfile get a STRICTER human gate — they are the gate machinery itself.
+    # Automatic mode never answers those; the judge's review still shows on the
+    # card, and the human decides.
+    if rec.get("payload", {}).get("strict") and not settings.JUDGE_MAY_ANSWER_STRICT:
+        _append_event(
+            ctx, sid, actor="judge", kind="judge.deferred_to_human", ref=rid,
+            why=("This merge touches the gate machinery (scaffold/, evolution/, pyproject.toml or "
+                 "Dockerfile). Automatic mode does not answer strict-path merges — please decide."),
+        )
+        return
     if verdict.approved:
         _answer_pending(ctx, sid, rid, "approve", f"Judge approved: {verdict.why}", actor="judge", record=False)
     elif counter["rejects"] < settings.JUDGE_MAX_AUTO_REJECTS:
@@ -1863,7 +1911,13 @@ async def _watch_merge_gate(ctx: UserContext, sid: str) -> None:
             pdir = _pending_dir(ctx, sid)
             for path in (sorted(pdir.glob("*.json")) if pdir.exists() else []):
                 rec = read_json(path, {})
-                rid = str(rec.get("id") or path.stem)
+                # The request id comes from the FILENAME, never from the record's
+                # own `id` field: that field is written by tenant code (an
+                # evolvable scaffold/hitl.py) and is used to build file paths, so
+                # trusting it would let a tenant steer platform writes.
+                rid = path.stem
+                if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,64}", rid):
+                    continue
                 if rec.get("kind") != "evolution_merge" or rid in seen:
                     continue
                 seen.add(rid)
@@ -1871,6 +1925,29 @@ async def _watch_merge_gate(ctx: UserContext, sid: str) -> None:
         except Exception:  # noqa: BLE001
             pass
         await asyncio.sleep(settings.JUDGE_MERGE_POLL_S)
+
+
+_RECONCILED: set[str] = set()
+
+
+async def _reconcile_after_restart(ctx: UserContext) -> None:
+    """Proposal outcomes are driven by the in-memory _RUNNING table, so an API
+    restart used to leave proposals pinned at "implementing" forever and the
+    approved queue permanently stalled. On this tenant's first R19 request after
+    a restart, close out any proposal whose evolution session is no longer
+    running and drain the queue."""
+    if ctx.user.user_id in _RECONCILED:
+        return
+    _RECONCILED.add(ctx.user.user_id)
+    try:
+        for prop in evo_store.list_proposals(ctx.state, statuses=("implementing",)):
+            sid = prop.get("session_id")
+            if not sid or _monitor_key(ctx, sid) in _RUNNING:
+                continue
+            await _after_evolution(ctx, sid)
+        await _launch_next_queued(ctx)
+    except Exception:  # noqa: BLE001 — reconciliation is best-effort
+        pass
 
 
 def _ledger_or_404(ctx: UserContext, bid: str) -> tuple[dict, dict | None]:
@@ -1890,7 +1967,11 @@ def _ledger_or_404(ctx: UserContext, bid: str) -> tuple[dict, dict | None]:
 def evo_mode(ctx: UserContext = Depends(_ctx)):
     rec = evo_store.load_settings(ctx.state)
     j = _judge_for(ctx)
-    return {"mode": rec["mode"], "updated": rec.get("updated"), "judge": {"available": j.available(), "model": j.model}}
+    return {
+        "mode": rec["mode"], "updated": rec.get("updated"),
+        "judge": {"available": j.available(), "model": j.model},
+        "platform_evolution": _platform_evolution_available(),
+    }
 
 
 @app.put("/evolution/mode")
@@ -1900,10 +1981,16 @@ async def set_evo_mode(body: schemas.EvoModeUpdate, ctx: UserContext = Depends(_
     if body.mode == "automatic" and not _judge_for(ctx).available():
         raise HTTPException(409, "automatic mode needs the LLM judge; configure COSCIENTIST_JUDGE_OPENAI_API_KEY (or state/secrets/judge_openai_key) first")
     rec = evo_store.set_mode(ctx.state, body.mode)
-    if body.mode == "automatic":
-        await _auto_launch(ctx)  # already-approved proposals go now
+    # Deliberately NOT auto-launching the existing backlog here: those verdicts
+    # were produced under manual-mode framing and may be days old, so flipping a
+    # toggle would fire a burst of evolutions the researcher never looked at. The
+    # next planner run (or an explicit Plan now) picks up the new mode.
     j = _judge_for(ctx)
-    return {"mode": rec["mode"], "updated": rec.get("updated"), "judge": {"available": j.available(), "model": j.model}}
+    return {
+        "mode": rec["mode"], "updated": rec.get("updated"),
+        "judge": {"available": j.available(), "model": j.model},
+        "platform_evolution": _platform_evolution_available(),
+    }
 
 
 @app.get("/evolution/judge")
@@ -1982,7 +2069,8 @@ async def evo_plan(body: schemas.PlanRequest, ctx: UserContext = Depends(_ctx)):
 
 
 @app.get("/evolution/proposals")
-def evo_proposals(brief_id: str | None = None, ctx: UserContext = Depends(_ctx)):
+async def evo_proposals(brief_id: str | None = None, ctx: UserContext = Depends(_ctx)):
+    await _reconcile_after_restart(ctx)
     bid = evo_store.safe_id(brief_id) if brief_id else None
     props = evo_store.list_proposals(ctx.state, brief_id=bid)
     latest = evo_store.latest_run(ctx.state, bid) if bid else None
@@ -1992,6 +2080,7 @@ def evo_proposals(brief_id: str | None = None, ctx: UserContext = Depends(_ctx))
         "running": _planner.is_running(ctx.state, bid) if bid else False,
         "mode": evo_store.load_settings(ctx.state)["mode"],
         "evolution_running": _evo_running(ctx),
+        "platform_evolution": _platform_evolution_available(),
     }
 
 
@@ -2020,18 +2109,21 @@ async def evo_decide(pid: str, body: schemas.ProposalDecision, ctx: UserContext 
         if second["id"] == prop["id"] or second.get("status") not in ("proposed", "queued"):
             raise HTTPException(409, "the second proposal is not open")
         targets.append(second)
+    if any(t.get("scope") == "platform" for t in targets) and not _platform_evolution_available():
+        raise HTTPException(501, "platform-scope evolutions are disabled on this deployment (COSCIENTIST_PLATFORM_EVOLUTION)")
     launched: list[dict] = []
     queued: list[str] = []
     for p in targets:
         p["human"] = {"decision": body.decision, "note": note, "at": now}
         evo_store.save_proposal(ctx.state, p)
         evo_store.record_decision(ctx.state, proposal_id=p["id"], actor="human", stage="proposal", decision=body.decision, note=note)
-        if not launched and not _evo_running(ctx):
-            sid = await _launch_proposal(ctx, p, actor="human")
-            launched.append({"proposal_id": p["id"], "session_id": sid})
-        else:
-            evo_store.set_status(ctx.state, p, "queued")
-            queued.append(p["id"])
+        async with _launch_lock(ctx):
+            if not launched and not _evo_running(ctx):
+                sid = await _launch_proposal(ctx, p, actor="human")
+                launched.append({"proposal_id": p["id"], "session_id": sid})
+            else:
+                evo_store.set_status(ctx.state, p, "queued")
+                queued.append(p["id"])
     return {"ok": True, "status": "launched" if launched else "queued", "launched": launched, "queued": queued}
 
 

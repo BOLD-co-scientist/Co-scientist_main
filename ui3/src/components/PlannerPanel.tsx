@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useApp } from "../state/store";
 import type { BriefSummary, EvoModeInfo, EvoProposalNode, GoalLedger, JudgeInfo, JudgeVerdict, ProposalList } from "../lib/types";
 
@@ -65,6 +65,7 @@ function JudgeBox({ j }: { j: JudgeVerdict | null }) {
 }
 
 export default function PlannerPanel({ open, onOpenDrawer }: { open: boolean; onOpenDrawer: () => void }) {
+
   const { api, sessionBrief, setEvolutionCommand, setEvolutionProposalId, adoptEvolution, evoRunning } = useApp();
   const [briefs, setBriefs] = useState<BriefSummary[]>([]);
   const [bid, setBid] = useState<string | null>(null);
@@ -80,6 +81,8 @@ export default function PlannerPanel({ open, onOpenDrawer }: { open: boolean; on
   const [hints, setHints] = useState("");
   const [hintsDirty, setHintsDirty] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
+  const bidRef = useRef<string | null>(null);
+  bidRef.current = bid;
 
   // Briefs → the problem this panel plans for. Default: the active session's
   // brief, else the most recently launched brief, else the first draft.
@@ -101,12 +104,18 @@ export default function PlannerPanel({ open, onOpenDrawer }: { open: boolean; on
 
   const refresh = useCallback(async () => {
     if (!bid) return;
+    const forBid = bid;
     try {
-      const [g, p] = await Promise.all([api.getGoals(bid), api.listProposals(bid)]);
+      const [g, p] = await Promise.all([api.getGoals(forBid), api.listProposals(forBid)]);
+      // An in-flight poll for the PREVIOUS brief must not overwrite the new
+      // one's plan (it would show brief A's proposals under brief B's title).
+      if (forBid !== bidRef.current) return;
       setGoals(g);
       setPlist(p);
+      setErr(null);
       if (!hintsDirty) setHints(g.approach_hints ?? "");
     } catch (e) {
+      if (forBid !== bidRef.current) return;
       setErr(e instanceof Error ? e.message : String(e));
     }
   }, [api, bid, hintsDirty]);
@@ -145,16 +154,27 @@ export default function PlannerPanel({ open, onOpenDrawer }: { open: boolean; on
   }, [refresh]);
 
   const proposals = plist?.proposals ?? [];
+
   const openProps = useMemo(() => proposals.filter((p) => OPEN.has(p.status)).slice().sort((a, b) => (b.created ?? "").localeCompare(a.created ?? "")), [proposals]);
   const pastProps = useMemo(() => proposals.filter((p) => !OPEN.has(p.status)).slice().sort((a, b) => (b.updated ?? b.created ?? "").localeCompare(a.updated ?? a.created ?? "")), [proposals]);
   const subgoals = useMemo(() => (goals?.subgoals ?? []).slice().sort((a, b) => a.order - b.order), [goals]);
+  // Ids of proposals that were declined, launched or belong to a brief we have
+  // since switched away from must drop out of the compare selection, or
+  // "Explore both" appears after ticking a single visible card.
+  useEffect(() => {
+    const selectable = new Set(openProps.filter((p) => p.status === "proposed" || p.status === "queued").map((p) => p.id));
+    setCompare((c) => (c.every((id) => selectable.has(id)) ? c : c.filter((id) => selectable.has(id))));
+  }, [openProps]);
   const goalText = useCallback((gid: string) => subgoals.find((s) => s.id === gid)?.text ?? gid, [subgoals]);
+  // A platform proposal cannot run while platform evolution is disabled; the
+  // server answers 501, so ask it rather than guessing from past proposals.
+  const platformEnabled = plist?.platform_evolution ?? mode?.platform_evolution ?? false;
 
   if (!open) return null;
 
   const toggleMode = () => {
-    if (!mode) return;
-    const next = mode.mode === "manual" ? "automatic" : "manual";
+    if (!effectiveMode) return;
+    const next = effectiveMode === "manual" ? "automatic" : "manual";
     void withBusy("mode", async () => { setMode(await api.setEvoMode(next)); });
   };
 
@@ -175,12 +195,17 @@ export default function PlannerPanel({ open, onOpenDrawer }: { open: boolean; on
     });
   };
   const decline = (p: EvoProposalNode) => {
-    const note = window.prompt("Why decline? One line helps the judge learn your taste (optional).") ?? "";
+    // `?? ""` used to turn Cancel/Esc into a confirmed decline.
+    const note = window.prompt("Why decline? One line helps the judge learn your taste (optional).");
+    if (note === null) return;
     void withBusy(p.id, () => api.decideProposal(p.id, "decline", note));
   };
   const edit = (p: EvoProposalNode) => {
-    setEvolutionCommand(p.command);
+    // Re-seed even when the text is identical to last time (the drawer keys off
+    // a change of this value), and carry the proposal so the launch links back.
+    setEvolutionCommand("");
     setEvolutionProposalId(p.id);
+    window.setTimeout(() => setEvolutionCommand(p.command), 0);
     onOpenDrawer();
   };
   const explore = () => {
@@ -195,6 +220,9 @@ export default function PlannerPanel({ open, onOpenDrawer }: { open: boolean; on
 
   const drift = goals?.drift && !goals.drift.answered ? goals.drift : null;
   const judgeOk = mode?.judge.available ?? false;
+  // The header is fetched once per open; the 4 s proposals poll also carries the
+  // mode, so prefer the fresher value rather than asserting a stale guess.
+  const effectiveMode = plist?.mode ?? mode?.mode ?? null;
 
   return (
     <div style={{ flex: `0 0 ${PLAN_W}px`, width: PLAN_W, borderRight: "1px solid var(--border)", background: "var(--bg1)", display: "flex", flexDirection: "column", minHeight: 0 }}>
@@ -211,15 +239,17 @@ export default function PlannerPanel({ open, onOpenDrawer }: { open: boolean; on
         {/* Mode + judge */}
         <div style={{ marginTop: 10, padding: "9px 11px", borderRadius: 9, border: "1px solid var(--border)", background: "var(--bg2)", display: "flex", alignItems: "center", gap: 10 }}>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 12, fontWeight: 600, color: "var(--hi)" }}>{mode?.mode === "automatic" ? "Automatic — the judge decides" : "Manual — you decide"}</div>
+            <div style={{ fontSize: 12, fontWeight: 600, color: "var(--hi)" }}>
+              {effectiveMode === null ? "Mode unknown" : effectiveMode === "automatic" ? "Automatic — the judge decides" : "Manual — you decide"}
+            </div>
             <div style={{ fontSize: 11, color: "var(--lo)", marginTop: 2 }}>
-              {judgeOk ? `Judge: ${mode?.judge.model}` : "Judge unavailable (no OpenAI key) — recommendations off"}
+              {mode === null ? "checking the judge…" : judgeOk ? `Judge: ${mode.judge.model}` : "Judge unavailable (no OpenAI key) — recommendations off"}
               {judge?.calibration.gate1.pairs ? ` · agrees with you ${Math.round((judge.calibration.gate1.agreement ?? 0) * 100)}% (${judge.calibration.gate1.pairs})` : ""}
             </div>
           </div>
-          <button onClick={toggleMode} disabled={busy === "mode" || (!judgeOk && mode?.mode !== "automatic")} title={judgeOk ? "Switch mode" : "Automatic mode needs the judge"}
-            style={btn(mode?.mode === "automatic" ? "ghost" : "evo", busy === "mode" || (!judgeOk && mode?.mode !== "automatic"))}>
-            {mode?.mode === "automatic" ? "Switch to manual" : "Go automatic"}
+          <button onClick={toggleMode} disabled={busy === "mode" || (!judgeOk && effectiveMode !== "automatic")} title={judgeOk ? "Switch mode" : "Automatic mode needs the judge"}
+            style={btn(effectiveMode === "automatic" ? "ghost" : "evo", busy === "mode" || (!judgeOk && effectiveMode !== "automatic"))}>
+            {effectiveMode === "automatic" ? "Switch to manual" : "Go automatic"}
           </button>
         </div>
         {err && <div style={{ marginTop: 8, fontSize: 11.5, color: "var(--err)" }}>{err}</div>}
@@ -241,13 +271,30 @@ export default function PlannerPanel({ open, onOpenDrawer }: { open: boolean; on
         <SectionHead title="Sequential goals" right={
           <div style={{ display: "flex", gap: 6 }}>
             <button style={btn("ghost")} onClick={() => setShowGoals((v) => !v)}>{showGoals ? "Hide" : "Show"}</button>
-            <button style={btn("ghost", !bid || busy === "derive")} disabled={!bid || busy === "derive"} onClick={() => bid && void withBusy("derive", () => api.deriveGoals(bid, hintsDirty ? hints : undefined))}>
+            <button
+              style={btn("ghost", !bid || busy === "derive")}
+              disabled={!bid || busy === "derive"}
+              title={goals?.researcher_ordered ? "Replaces the subgoals with a freshly derived plan (your edits are lost)" : "Derive the plan from the problem brief"}
+              onClick={() => {
+                if (!bid) return;
+                // Once the researcher has ordered the plan the server keeps it
+                // unless told otherwise, so a button labelled "Re-derive" that
+                // silently refreshed only the wishlist has to ask first.
+                const replace = !goals?.researcher_ordered || window.confirm("Replace your ordered subgoals with a freshly derived plan?");
+                void withBusy("derive", () => api.deriveGoals(bid, hintsDirty ? hints : undefined, !replace));
+              }}
+            >
               {busy === "derive" ? "Deriving…" : subgoals.length ? "Re-derive" : "Derive from brief"}
             </button>
           </div>
         } />
         {showGoals && (
           <>
+            {goals?.derived?.error && (
+              <div style={{ marginBottom: 8, fontSize: 11.5, color: "var(--err)" }}>
+                Deriving the plan failed: {goals.derived.error}
+              </div>
+            )}
             {subgoals.length === 0 ? (
               <div style={{ fontSize: 12, color: "var(--lo)", lineHeight: 1.5 }}>No plan yet. Derive the sequential subgoals from the problem brief, then reorder them and mark the one you are on.</div>
             ) : (
@@ -303,7 +350,15 @@ export default function PlannerPanel({ open, onOpenDrawer }: { open: boolean; on
         <SectionHead title="Proposed evolutions" right={
           <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
             {plist?.running && <span style={{ fontSize: 10.5, color: "var(--evo)" }}>● planning</span>}
-            {compare.length === 2 && <button style={btn("evo", busy !== null)} disabled={busy !== null} onClick={explore}>Explore both</button>}
+            {compare.length === 2 && (() => {
+              const chosen = proposals.filter((p) => compare.includes(p.id));
+              const blocked = chosen.some((p) => p.scope === "platform") && !platformEnabled;
+              return (
+                <button style={btn("evo", busy !== null || blocked)} disabled={busy !== null || blocked}
+                  title={blocked ? "One of these is a platform-scope proposal, which is disabled on this deployment" : "Explore both branches from the same parent"}
+                  onClick={explore}>Explore both</button>
+              );
+            })()}
             <button style={btn("ghost", !bid || !!plist?.running)} disabled={!bid || !!plist?.running} onClick={() => bid && void withBusy("plan", () => api.plan(bid, "manual"))}>{busy === "plan" ? "Starting…" : "Plan now"}</button>
           </div>
         } />
@@ -353,7 +408,20 @@ export default function PlannerPanel({ open, onOpenDrawer }: { open: boolean; on
                   {p.status === "queued" && <div style={{ marginTop: 6, fontSize: 11, color: "var(--warn)" }}>Approved — waits for the running evolution to finish.</div>}
                   {canDecide && (
                     <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
-                      {p.status === "proposed" && <button style={btn("primary", busy === p.id || evoRunning || !!plist?.evolution_running)} disabled={busy === p.id || evoRunning || !!plist?.evolution_running} title={evoRunning ? "An evolution is already running" : "Launch the evolution agent with this command"} onClick={() => run(p)}>Run</button>}
+                      {p.status === "proposed" && (() => {
+                        const running = evoRunning || !!plist?.evolution_running;
+                        const blocked = p.scope === "platform" && !platformEnabled;
+                        return (
+                          <button
+                            style={btn("primary", busy === p.id || blocked)}
+                            disabled={busy === p.id || blocked}
+                            title={blocked ? "Platform-scope evolutions are disabled on this deployment" : running ? "An evolution is running — this will be queued and start when it finishes" : "Launch the evolution agent with this command"}
+                            onClick={() => run(p)}
+                          >
+                            {running ? "Queue" : "Run"}
+                          </button>
+                        );
+                      })()}
                       <button style={btn("ghost", busy === p.id)} disabled={busy === p.id} onClick={() => edit(p)}>Edit & run</button>
                       <button style={btn("ghost", busy === p.id)} disabled={busy === p.id} onClick={() => decline(p)}>Decline</button>
                     </div>

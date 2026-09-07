@@ -135,6 +135,10 @@ EVO_PLAN_DELAY_S = int(os.environ.get("COSCIENTIST_EVO_PLAN_DELAY_S", "45"))
 # (send the agent back to revise) before leaving the gate to the human.
 JUDGE_MERGE_POLL_S = float(os.environ.get("COSCIENTIST_JUDGE_MERGE_POLL_S", "2"))
 JUDGE_MAX_AUTO_REJECTS = int(os.environ.get("COSCIENTIST_JUDGE_MAX_AUTO_REJECTS", "2"))
+# Even in automatic mode the judge does NOT answer a merge that touches the gate
+# machinery itself (scaffold/, evolution/, pyproject.toml, Dockerfile) — CLAUDE.md
+# mandates a stricter human gate there. Set to 1 only for a deliberate experiment.
+JUDGE_MAY_ANSWER_STRICT = os.environ.get("COSCIENTIST_JUDGE_MAY_ANSWER_STRICT", "0") not in ("0", "false", "False", "")
 # The git repo evolution worktrees branch from. Defaults to ROOT (the tenant's
 # own harness); a platform-scope evolution sets it to the shared platform
 # checkout so the agent can edit ui3/ and api/ (R19 answer 3), while ROOT still

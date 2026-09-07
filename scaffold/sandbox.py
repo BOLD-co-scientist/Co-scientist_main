@@ -86,6 +86,37 @@ def branch_tip(wt: Worktree) -> str:
     return _git("rev-parse", "HEAD", cwd=wt.path).strip()
 
 
+def can_fast_forward(wt: Worktree) -> bool:
+    """True iff the ACTIVE tree's HEAD is an ancestor of this worktree's branch
+    tip — i.e. ``git merge --ff-only`` would succeed.
+
+    Decided by ``git merge-base --is-ancestor``, never by parsing an error
+    message: ``_git`` embeds the argv (including ``--ff-only``) in every
+    ``GitError``, so a substring test on the message can never distinguish a
+    moved HEAD from a dirty tree or a broken repo (R19).
+    """
+    try:
+        head = _git("rev-parse", "HEAD").strip()
+        tip = branch_tip(wt)
+    except GitError:
+        return False
+    if head == tip:
+        return True
+    try:
+        _git("merge-base", "--is-ancestor", head, tip)
+        return True
+    except GitError:
+        return False
+
+
+def tag_exists(tag: str) -> bool:
+    try:
+        _git("rev-parse", "--verify", f"refs/tags/{tag}")
+        return True
+    except GitError:
+        return False
+
+
 def merge_to_main(wt: Worktree) -> str:
     """Fast-forward the active tree (HEAD) to the worktree's tip. Raises
     ``GitError`` when HEAD has moved since the branch was cut (a sibling already

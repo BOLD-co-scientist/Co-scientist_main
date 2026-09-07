@@ -66,7 +66,12 @@ export default function HitlPanel({ pending: pendingProp, answer: answerProp }: 
                 {p.judge.recommendation && <div style={{ marginTop: 4, fontSize: 12.5, color: "var(--hi)", fontWeight: 600 }}>{p.judge.recommendation}</div>}
                 {p.judge.why && <div style={{ marginTop: 3, fontSize: 12, color: "var(--mid)", lineHeight: 1.5 }}>{p.judge.why}</div>}
                 {p.judge.risks?.length > 0 && <div style={{ marginTop: 4, fontSize: 11, color: "var(--lo)" }}>Risks: {p.judge.risks.join("; ")}</div>}
-                {p.judge.mode === "automatic" && <div style={{ marginTop: 4, fontSize: 11, color: "var(--lo)" }}>Automatic mode: the judge answers this gate itself; you may still answer first.</div>}
+                {p.judge.mode === "automatic" && (
+                  <div style={{ marginTop: 4, fontSize: 11, color: "var(--lo)" }}>
+                    Automatic mode reviewed this and left the decision to you — either because it touches the
+                    gate machinery (a stricter human gate) or because it has been sent back for changes already.
+                  </div>
+                )}
               </div>
             )}
             <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 7 }}>

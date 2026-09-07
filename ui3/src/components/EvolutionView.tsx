@@ -52,10 +52,14 @@ function ConversationDrawer({
     if (open) scroller.current?.scrollTo({ top: scroller.current.scrollHeight });
   }, [shown.length, open]);
 
-  const submit = () => {
+  const submit = async () => {
     const c = cmd.trim();
     if (!c || evoRunning) return;
-    void startEvolution(c, base?.sha, evolutionProposalId ?? undefined);
+    // Keep the text until the server has actually accepted it: the R19 routes
+    // reject for real reasons (already running, proposal decided, platform
+    // scope disabled) and wiping the composer on a rejection loses the work.
+    const ok = await startEvolution(c, base?.sha, evolutionProposalId ?? undefined);
+    if (!ok) return;
     setCmd("");
     clearBase();
     setEvolutionProposalId(null);
@@ -119,13 +123,13 @@ function ConversationDrawer({
             <textarea
               value={cmd}
               onChange={(e) => setCmd(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); } }}
+              onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void submit(); } }}
               rows={1}
               placeholder={evoRunning ? "An evolution is running…" : "Describe a change…  (Enter to run)"}
               disabled={evoRunning}
               style={{ flex: 1, resize: "none", padding: "10px 13px", background: "var(--bg0)", border: "1px solid var(--border)", borderRadius: 9, color: "var(--hi)", fontSize: 13, outline: "none", opacity: evoRunning ? 0.6 : 1, fontFamily: "var(--ui)" }}
             />
-            <button onClick={submit} disabled={evoRunning || !cmd.trim()}
+            <button onClick={() => void submit()} disabled={evoRunning || !cmd.trim()}
               style={{ padding: "10px 16px", background: "var(--evo)", color: "#100a1c", fontWeight: 700, borderRadius: 9, fontSize: 13, opacity: evoRunning || !cmd.trim() ? 0.5 : 1 }}>
               {evoRunning ? "Running…" : "Evolve"}
             </button>
@@ -137,7 +141,7 @@ function ConversationDrawer({
 }
 
 export default function EvolutionView() {
-  const { evoRunning, evolutionCommand, setEvolutionCommand } = useApp();
+  const { evoRunning, evolutionCommand, setEvolutionCommand, setEvolutionProposalId } = useApp();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [base, setBase] = useState<{ sha: string; label: string } | null>(null);
   const [story, setStory] = useState<{ sid: string; label: string } | null>(null);
@@ -153,6 +157,7 @@ export default function EvolutionView() {
   const evolveFrom = (sha: string, label: string) => {
     setStory(null);
     setBase({ sha, label });
+    setEvolutionProposalId(null); // this is a node branch, not a planner proposal
     setDrawerOpen(true);
   };
 
@@ -182,7 +187,7 @@ export default function EvolutionView() {
           {planOpen ? "Hide plan" : "Plan"}
         </button>
         <button
-          onClick={() => { if (drawerOpen) { setDrawerOpen(false); setBase(null); setStory(null); } else { setStory(null); setDrawerOpen(true); } }}
+          onClick={() => { if (drawerOpen) { setDrawerOpen(false); setBase(null); setStory(null); setEvolutionProposalId(null); } else { setStory(null); setEvolutionProposalId(null); setDrawerOpen(true); } }}
           style={{ flex: "0 0 auto", padding: "8px 14px", borderRadius: 9, fontSize: 12.5, fontWeight: 700, background: drawerOpen ? "var(--bg2)" : "var(--evo)", color: drawerOpen ? "var(--mid)" : "#100a1c", border: drawerOpen ? "1px solid var(--border)" : "none" }}
         >
           {drawerOpen ? "Hide conversation" : "＋ New evolution"}
@@ -197,7 +202,7 @@ export default function EvolutionView() {
           base={base}
           seed={seed}
           story={story}
-          onClose={() => { setDrawerOpen(false); setBase(null); setStory(null); }}
+          onClose={() => { setDrawerOpen(false); setBase(null); setStory(null); setEvolutionProposalId(null); }}
           clearBase={() => setBase(null)}
           onExitStory={() => setStory(null)}
         />

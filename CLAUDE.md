@@ -147,8 +147,13 @@ tests/test_smoke_v0.py # the gating test for sensitive-path evolution merges
   decision "eval folder" in `state/evolution/`), an OpenAI judge
   (`api/judge.py`) rates every proposal and every merge request, and a
   per-tenant mode decides who answers: `manual` (human decides, judge
-  recommends) or `automatic` (judge decides, human told why). Both HITL gates
-  stay in place; the evolution agent itself is unchanged. Plan:
+  recommends) or `automatic` (judge decides and the human is told why). Both
+  gates remain — nothing merges unreviewed — but note the boundary: in
+  automatic mode the *platform* answers the merge gate on the researcher's
+  behalf, except for strict-path changes (`scaffold/`, `evolution/`,
+  `pyproject.toml`, `Dockerfile`), which always go to a human. The tenant's own
+  runtime still cannot answer its merge gate, and the evolution agent is
+  unchanged. Plan:
   [docs/plans/R19-guided-evolution-search.md](docs/plans/R19-guided-evolution-search.md).
 
 ## Current work — start here

@@ -414,11 +414,14 @@ export interface ProposalList {
   running: boolean;
   mode: EvoMode;
   evolution_running: boolean;
+  platform_evolution?: boolean;
 }
 export interface EvoModeInfo {
   mode: EvoMode;
   updated?: string | null;
   judge: { available: boolean; model: string };
+  /** False when platform-scope (ui3/api) evolutions are disabled on this deployment. */
+  platform_evolution?: boolean;
 }
 export interface CalibrationGate {
   pairs: number;

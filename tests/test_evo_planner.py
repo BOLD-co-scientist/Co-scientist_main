@@ -341,9 +341,13 @@ def test_plan_creates_judged_proposals_and_dedupes(api):
     run2 = _plan_and_wait(api, bid)
     assert run2["proposal_ids"] == [] and len(_proposals(api, bid)["proposals"]) == 3
     # busy lock returns 409 while a run holds it
-    api["planner"].acquire(api["ctx"].state, bid)
+    api["planner"].acquire(api["ctx"].state, bid, "tok-a")
     assert api["client"].post("/evolution/plan", json={"brief_id": bid}, headers=api["headers"]).status_code == 409
-    api["planner"].release(api["ctx"].state, bid)
+    # A run that lost its lock to a stale takeover must not unlock the new holder.
+    api["planner"].release(api["ctx"].state, bid, "tok-someone-else")
+    assert api["planner"].is_running(api["ctx"].state, bid)
+    api["planner"].release(api["ctx"].state, bid, "tok-a")
+    assert not api["planner"].is_running(api["ctx"].state, bid)
     assert api["client"].post("/evolution/plan", json={"brief_id": "nope"}, headers=api["headers"]).status_code == 404
 
 
@@ -384,10 +388,13 @@ def test_decide_pick_launches_links_and_replans_on_merge(api):
 
 
 def test_decide_both_queues_second_then_drains(api):
+    """Two harness proposals: the first launches, the second queues, and it
+    launches by itself once the slot frees."""
     bid = _make_brief(api)
+    api["model"].next_plan = _plan_json(["Add a structure predictor tool", "Add a pocket finder tool"])
     _plan_and_wait(api, bid)
     props = {p["title"]: p for p in _proposals(api, bid)["proposals"]}
-    a, b = props["Add a structure predictor tool"], props["Add a 3D structure viewer UI panel"]
+    a, b = props["Add a structure predictor tool"], props["Add a pocket finder tool"]
     r = api["client"].post(f"/evolution/proposals/{a['id']}/decide", json={"decision": "both", "with_id": b["id"]}, headers=api["headers"])
     assert r.status_code == 200, r.text
     assert r.json()["launched"][0]["proposal_id"] == a["id"] and r.json()["queued"] == [b["id"]]
@@ -395,10 +402,27 @@ def test_decide_both_queues_second_then_drains(api):
     assert api["evo_store"].load_proposal(api["ctx"].state, b["id"])["status"] == "queued"
     _finish_evo(api, sid_a, merged=False)
     assert api["evo_store"].load_proposal(api["ctx"].state, a["id"])["status"] == "rejected"
-    # the queued second child launches once the slot frees (platform scope is
-    # blocked until the cutover machinery is enabled → it ends with an error)
-    pb = _wait(lambda: (lambda x: x if x["status"] != "queued" else None)(api["evo_store"].load_proposal(api["ctx"].state, b["id"])))
-    assert pb["status"] == "ended" and "platform" in pb.get("error", "")
+    # A HUMAN queued the second one, so it drains even in manual mode.
+    pb = _wait(lambda: (lambda x: x if x["status"] == "implementing" else None)(api["evo_store"].load_proposal(api["ctx"].state, b["id"])))
+    assert pb["session_id"] and pb["human"]["decision"] == "both"
+
+
+def test_platform_proposal_is_refused_before_any_decision_is_recorded(api):
+    """A proposal this deployment cannot run must not burn a decision: picking it
+    returns 501 and leaves the eval folder / calibration untouched."""
+    bid = _make_brief(api)
+    _plan_and_wait(api, bid)
+    plat = next(p for p in _proposals(api, bid)["proposals"] if p["scope"] == "platform")
+    r = api["client"].post(f"/evolution/proposals/{plat['id']}/decide", json={"decision": "pick"}, headers=api["headers"])
+    assert r.status_code == 501
+    after = api["evo_store"].load_proposal(api["ctx"].state, plat["id"])
+    assert after["status"] == "proposed" and after["human"] is None
+    assert [d for d in api["evo_store"].decisions(api["ctx"].state, proposal_id=plat["id"]) if d["actor"] == "human"] == []
+    # ...and through the edit-and-run route, which must use the PROPOSAL's scope
+    # rather than the request's default "harness".
+    r = api["client"].post("/evolution/commands", json={"command": plat["command"], "proposal_id": plat["id"]}, headers=api["headers"])
+    assert r.status_code == 501
+    assert api["evo_store"].load_proposal(api["ctx"].state, plat["id"])["human"] is None
 
 
 def test_decline_is_remembered_and_not_reproposed(api):
@@ -437,19 +461,27 @@ def test_automatic_mode_requires_judge_then_auto_launches(api, monkeypatch):
     by = {p["title"]: p for p in props}
     assert by["Add a structure predictor tool"]["status"] == "implementing"   # highest judge score launches first
     assert by["Add a pocket finder tool"]["status"] == "queued"
-    assert by["Weaken the merge gate to skip smoke"]["status"] == "proposed"   # declined by the judge → never launched
+    # In automatic mode the judge decides gate 1, so its decline is recorded as
+    # one — the proposal leaves the open list instead of keeping a live Run button.
+    assert by["Weaken the merge gate to skip smoke"]["status"] == "declined"
     assert by["Add a structure predictor tool"]["launched_by"] == "judge"
     sid = by["Add a structure predictor tool"]["session_id"]
     ev = api["client"].get(f"/sessions/{sid}/events", headers=api["headers"]).json()
     assert any(e["kind"] == "evolution.judge_approved" and e["why"] for e in ev)   # the human is told why
     kinds = [e["kind"] for e in api["evo_store"].read_events(api["ctx"].state)]
     assert "proposal.auto_approved" in kinds and "proposal.launched" in kinds
-    # switching back to manual stops the queue from draining
+    # Switching back to manual stops the JUDGE-queued backlog from draining:
+    # in manual mode the human decides both gates (Decision 2).
     api["client"].put("/evolution/mode", json={"mode": "manual"}, headers=api["headers"])
     _finish_evo(api, sid, merged=True, version_id="v1")
-    # manual mode still drains proposals a human/judge already approved (queued), one at a time
-    pb = _wait(lambda: (lambda x: x if x["status"] == "implementing" else None)(api["evo_store"].load_proposal(api["ctx"].state, by["Add a pocket finder tool"]["id"])))
-    assert pb["session_id"]
+    time.sleep(0.4)
+    still = api["evo_store"].load_proposal(api["ctx"].state, by["Add a pocket finder tool"]["id"])
+    assert still["status"] == "queued" and not still.get("session_id"), "manual mode must not launch a judge-queued proposal"
+    # Flipping back to automatic does not fire the stale backlog either — those
+    # verdicts were formed under manual framing and may be days old.
+    api["client"].put("/evolution/mode", json={"mode": "automatic"}, headers=api["headers"])
+    time.sleep(0.3)
+    assert api["evo_store"].load_proposal(api["ctx"].state, by["Add a pocket finder tool"]["id"])["status"] == "queued"
 
 
 def test_merge_gate_judge_review_manual_and_automatic(api):
@@ -525,3 +557,117 @@ def test_tenant_prompt_override_is_used(api):
     (api["ctx"].root / "prompts" / "evo_plan.md").write_text("MY OVERRIDE {{MISSION}} {{STATUS}} {{EVAL_FOLDER}} {{HARNESS_INVENTORY}} {{PLATFORM_INVENTORY}} {{TRIGGER}} {{MODE}}", encoding="utf-8")
     run = _plan_and_wait(api, bid)
     assert run["prompt"].startswith("MY OVERRIDE") and run["prompt_path"].endswith("evo_plan.md")
+
+
+# ---------- regressions from the adversarial review (see tests/test_evo_fixes.py) ----------
+
+
+def test_strict_path_merge_is_never_auto_answered_by_the_judge(api):
+    """CLAUDE.md mandates a stricter human gate for scaffold/, evolution/,
+    pyproject.toml and Dockerfile — the gate machinery itself. Automatic mode
+    must review those and hand them to the human, never answer them."""
+    server, ctx = api["server"], api["ctx"]
+    bid = _make_brief(api)
+    _plan_and_wait(api, bid)
+    t = next(p for p in _proposals(api, bid)["proposals"] if p["title"] == "Add a structure predictor tool")
+    sid = api["client"].post(f"/evolution/proposals/{t['id']}/decide", json={"decision": "pick"}, headers=api["headers"]).json()["launched"][0]["session_id"]
+    api["client"].put("/evolution/mode", json={"mode": "automatic"}, headers=api["headers"])
+    rid = "strictreq"
+    server.write_json(server._pending_dir(ctx, sid) / f"{rid}.json", {
+        "id": rid, "ts": "t", "kind": "evolution_merge", "summary": "Merge: touch the gate",
+        "payload": {"branch": "evo/x", "summary": "s", "rationale": "r", "strict": True,
+                    "smoke": {"ran": True, "ok": True}, "diff_preview": "+ scaffold/hitl.py change"},
+        "decision": None,
+    })
+    _wait(lambda: any(e["kind"] == "judge.deferred_to_human" and e.get("ref") == rid
+                      for e in api["client"].get(f"/sessions/{sid}/events", headers=api["headers"]).json()))
+    assert (server._pending_dir(ctx, sid) / f"{rid}.json").exists(), "a strict merge must stay pending for the human"
+    assert not (server._answered_dir(ctx, sid) / f"{rid}.json").exists()
+    # The judge still REVIEWED it — the recommendation is on the card.
+    pend = api["client"].get(f"/hitl/{sid}/pending", headers=api["headers"]).json()
+    assert pend and pend[0]["judge"]["verdict"] in ("approve", "decline")
+
+
+def test_watcher_keys_requests_by_filename_not_by_tenant_written_id(api):
+    """The request id is used to build platform-side file paths, and the record's
+    own `id` field is written by (evolvable) tenant code."""
+    server, ctx = api["server"], api["ctx"]
+    bid = _make_brief(api)
+    _plan_and_wait(api, bid)
+    t = next(p for p in _proposals(api, bid)["proposals"] if p["title"] == "Add a structure predictor tool")
+    sid = api["client"].post(f"/evolution/proposals/{t['id']}/decide", json={"decision": "pick"}, headers=api["headers"]).json()["launched"][0]["session_id"]
+    rid = "safe-id"
+    server.write_json(server._pending_dir(ctx, sid) / f"{rid}.json", {
+        "id": "../../../../escape", "ts": "t", "kind": "evolution_merge", "summary": "s",
+        "payload": {"branch": "b", "summary": "s", "rationale": "r", "smoke": {"ran": False}, "diff_preview": "+x"},
+        "decision": None,
+    })
+    _wait(lambda: (server._judge_dir(ctx, sid) / f"{rid}.json").exists())
+    assert not (ctx.state / "escape.json").exists() and not (ctx.root.parent / "escape.json").exists()
+
+
+def test_judge_key_is_not_passed_into_tenant_subprocesses(api, monkeypatch):
+    """The tenant's evolution agent can run `echo $VAR` through bash_ro."""
+    monkeypatch.setenv("COSCIENTIST_JUDGE_OPENAI_API_KEY", "sk-judge-secret-value-123456")
+    env = api["server"]._runtime_env(api["ctx"])
+    assert "COSCIENTIST_JUDGE_OPENAI_API_KEY" not in env
+    assert not any("sk-judge-secret" in str(v) for v in env.values())
+
+
+def test_adoption_is_recorded_per_turn_not_per_session(api):
+    """R10 sessions have many turns; deduping on the session id alone hid every
+    turn after the first from the planner's adoption signal."""
+    server, ctx, es = api["server"], api["ctx"], api["evo_store"]
+    sid = "s-multi"
+    server._ensure_session_dirs(ctx, sid)
+    server._append_event(ctx, sid, actor="supervisor", kind="tool.use", tool="mcp__py_exec__run")
+    server._append_event(ctx, sid, actor="system", kind="research.complete", reason="finished")
+    api["client"].portal.call(server._record_adoption, ctx, sid)
+    server._append_event(ctx, sid, actor="supervisor", kind="tool.use", tool="mcp__ocr__read")
+    server._append_event(ctx, sid, actor="system", kind="research.complete", reason="finished")
+    api["client"].portal.call(server._record_adoption, ctx, sid)
+    ad = es.load_adoption(ctx.state)["versions"]["bootstrap"]
+    assert ad["sessions"] == 2 and ad["tool_uses"]["mcp__ocr__read"] == 1
+
+
+def test_monitor_hooks_actually_run_the_r19_loop(api):
+    """The R19 hooks in _monitor_runtime were never exercised: the suite called
+    _after_evolution / _record_adoption directly, so deleting the hooks left
+    every test green. Drive the real monitor instead."""
+    server, ctx, es = api["server"], api["ctx"], api["evo_store"]
+    bid = _make_brief(api)
+    _plan_and_wait(api, bid)
+    t = next(p for p in _proposals(api, bid)["proposals"] if p["title"] == "Add a structure predictor tool")
+    sid = api["client"].post(f"/evolution/proposals/{t['id']}/decide", json={"decision": "pick"}, headers=api["headers"]).json()["launched"][0]["session_id"]
+    server._append_event(ctx, sid, actor="evolution", kind="version.recorded", version="v_hook", tag="ver/v_hook")
+    server._append_event(ctx, sid, actor="evolution", kind="evolution.merged", ref="x")
+
+    class _Proc:
+        async def wait(self):
+            return 0
+
+    class _FH:
+        def close(self):
+            pass
+
+    server._RUNNING[server._monitor_key(ctx, sid)] = _Proc()
+    api["client"].portal.call(lambda: server._monitor_runtime(ctx, sid, _Proc(), _FH()))
+    assert es.load_proposal(ctx.state, t["id"])["status"] == "merged"
+
+
+def test_restart_reconciliation_unsticks_implementing_proposals(api):
+    """Outcomes are driven by the in-memory _RUNNING table, so an API restart
+    used to leave proposals pinned at 'implementing' and the queue stalled."""
+    server, ctx, es = api["server"], api["ctx"], api["evo_store"]
+    bid = _make_brief(api)
+    _plan_and_wait(api, bid)
+    t = next(p for p in _proposals(api, bid)["proposals"] if p["title"] == "Add a structure predictor tool")
+    sid = api["client"].post(f"/evolution/proposals/{t['id']}/decide", json={"decision": "pick"}, headers=api["headers"]).json()["launched"][0]["session_id"]
+    server._append_event(ctx, sid, actor="evolution", kind="evolution.merged", ref="x")
+    server._append_event(ctx, sid, actor="evolution", kind="version.recorded", version="v_restart")
+    # Simulate the restart: the process table is empty and nothing reconciled yet.
+    server._RUNNING.clear()
+    server._RECONCILED.clear()
+    assert es.load_proposal(ctx.state, t["id"])["status"] == "implementing"
+    api["client"].get(f"/evolution/proposals?brief_id={bid}", headers=api["headers"])
+    _wait(lambda: es.load_proposal(ctx.state, t["id"])["status"] == "merged")
