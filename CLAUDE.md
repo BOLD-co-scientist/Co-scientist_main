@@ -141,6 +141,16 @@ researcher_data/       # bind-mounted ro into container — researcher drops fil
 tests/test_smoke_v0.py # the gating test for sensitive-path evolution merges
 ```
 
+- **Guided evolution search (R19).** Self-improvement is no longer only
+  human-typed commands: `api/planner.py` proposes goal-conditioned evolutions
+  (from the brief's sequential goals in `api/goals.py` + the version tree + the
+  decision "eval folder" in `state/evolution/`), an OpenAI judge
+  (`api/judge.py`) rates every proposal and every merge request, and a
+  per-tenant mode decides who answers: `manual` (human decides, judge
+  recommends) or `automatic` (judge decides, human told why). Both HITL gates
+  stay in place; the evolution agent itself is unchanged. Plan:
+  [docs/plans/R19-guided-evolution-search.md](docs/plans/R19-guided-evolution-search.md).
+
 ## Current work — start here
 
 **[ROADMAP.md](ROADMAP.md) is the source of truth for what's being built.** Per-feature step lists live under [docs/plans/](docs/plans/) — pick the first unchecked `- [ ]` step in the active plan and do it.

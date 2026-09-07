@@ -11,6 +11,7 @@ Created as siblings of the main checkout so they don't shadow each other and don
 | `feat/R1-replay` | `../coscientist-R1/` | [R1-replay-event-log.md](R1-replay-event-log.md) |
 | `feat/R5-cost` | `../coscientist-R5/` | [R5-cost-tier-routing.md](R5-cost-tier-routing.md) |
 | `feat/R2-reflection` | `../coscientist-R2/` | [R2-reflection-lessons.md](R2-reflection-lessons.md) |
+| `feat/R19-guided-evolution` | `../coscientist-R19/` | [R19-guided-evolution-search.md](R19-guided-evolution-search.md) — off `feat/O1-onboarding`; the ui3 `node_modules` is a symlink to the main checkout's |
 
 The main branch (`main` at `coscientist/`) stays clean for integration.
 

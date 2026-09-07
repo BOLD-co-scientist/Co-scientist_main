@@ -4,12 +4,26 @@
     {
       "name": "ui3-mock",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev:mock", "--prefix", "ui3"],
+      "runtimeArgs": [
+        "run",
+        "dev:mock",
+        "--prefix",
+        "ui3"
+      ],
       "port": 5174
     },
     {
       "name": "api-local",
       "url": "http://127.0.0.1:8765"
+    },
+    {
+      "name": "api-r19",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": [
+        "deploy/dev_api.sh",
+        "8799"
+      ],
+      "port": 8799
     }
   ]
 }
