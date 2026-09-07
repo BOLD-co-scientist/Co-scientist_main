@@ -2,7 +2,8 @@ import { useApp } from "../state/store";
 import { statusOf } from "../lib/format";
 
 export default function SessionRail() {
-  const { sessions, activeId, select, mainView, setMainView, startNewSession, draftNew } = useApp();
+  const { sessions, activeId, select, mainView, setMainView, startNewSession } = useApp();
+  const onboarding = mainView === "onboarding";
 
   const navBtn = (on: boolean) =>
     ({
@@ -24,7 +25,8 @@ export default function SessionRail() {
       <div style={{ padding: "14px 14px 10px" }}>
         <button
           onClick={startNewSession}
-          style={{ width: "100%", padding: 10, background: draftNew && mainView === "session" && !activeId ? "var(--accent)" : "var(--accent-soft)", border: "1px solid var(--accent-dim)", color: draftNew && mainView === "session" && !activeId ? "#06121c" : "var(--accent)", borderRadius: 9, fontWeight: 600, fontSize: 13, display: "flex", alignItems: "center", justifyContent: "center", gap: 7 }}
+          title="Define the problem, attach data, pick a hypothesis, then launch"
+          style={{ width: "100%", padding: 10, background: onboarding ? "var(--accent)" : "var(--accent-soft)", border: "1px solid var(--accent-dim)", color: onboarding ? "#06121c" : "var(--accent)", borderRadius: 9, fontWeight: 600, fontSize: 13, display: "flex", alignItems: "center", justifyContent: "center", gap: 7 }}
         >
           <span style={{ fontSize: 16, lineHeight: 1 }}>+</span> New session
         </button>
@@ -39,6 +41,9 @@ export default function SessionRail() {
         </button>
         <button onClick={() => setMainView("evolution")} style={navBtn(mainView === "evolution")}>
           <span style={{ width: 15, textAlign: "center", opacity: 0.85 }}>{"\u25C7"}</span> Evolution
+        </button>
+        <button onClick={() => setMainView("projects")} title="The org-wide project tree: every shared problem and how they relate" style={navBtn(mainView === "projects")}>
+          <span style={{ width: 15, textAlign: "center", opacity: 0.85 }}>{"\u2B21"}</span> Projects
         </button>
       </div>
 
@@ -63,6 +68,11 @@ export default function SessionRail() {
                 <span style={{ display: "flex", alignItems: "center", gap: 7, marginTop: 4 }}>
                   <span style={{ fontFamily: "var(--mono)", fontSize: 10, color: "var(--lo)" }}>{s.session_id}</span>
                   <span style={{ fontSize: 10, color: st.color, fontWeight: 600 }}>{st.label}</span>
+                  {s.has_brief && (
+                    <span title="Started from a problem brief" style={{ fontFamily: "var(--mono)", fontSize: 9, fontWeight: 700, padding: "0 5px", borderRadius: 4, background: "var(--accent-soft)", color: "var(--accent)", letterSpacing: ".04em" }}>
+                      brief
+                    </span>
+                  )}
                 </span>
               </span>
             </button>

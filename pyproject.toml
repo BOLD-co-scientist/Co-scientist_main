@@ -9,6 +9,7 @@ description = "OpenPhil AI coscientist v3 — research agent + evolution agent o
 requires-python = ">=3.11"
 dependencies = [
     "claude-agent-sdk>=0.1.0",
+    "anthropic>=0.40",
     "fastapi>=0.110",
     "uvicorn[standard]>=0.27",
     "pyyaml>=6.0",

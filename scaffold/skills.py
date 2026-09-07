@@ -123,6 +123,10 @@ async def run_proposal(
         path = save_skill(name, description, body)
         write_json(archive_dir / "decision.json", {"status": "saved", "name": name})
         eventlog.append(session_id, actor=agent_id, kind="skill.approved", name=name, ref=archive_dir.name)
+        # R17 note: a skill is a durable, cross-version asset (like memory/results),
+        # NOT a version node — it is saved here and left out of git on purpose, so it
+        # persists across version switches instead of time-travelling with the code.
+        # (Revisit if we ever treat skills as version-bound harness — see R17 doc.)
         return True, f"SAVED skill '{name}' at {path}. It is available to your future sessions."
 
     note = (decision.get("note") or "").strip()

@@ -75,18 +75,56 @@ src/
     TopBar, SessionRail, Workbench
     EventStream, EventItem, Composer      ← the signature timeline
     RightRail, HitlPanel, FilesPanel, ContextPanel
-    HypothesisView, HypothesisTree                  research-direction forking tree
+    OnboardingView                        ← the onboarding system (O1+O2): five-question statement → data → project tree & advisor → hypotheses → launch
+    AdvisorCards, NearTree                advisor recommendations + one-click HITL-gated imports; the near-tree around a problem
+    ProjectTreeView                       the org-wide project tree (Projects page)
+    HypothesisView, HypothesisCards       parallel-set hypothesis explorer (cards shared with onboarding)
     EvolutionView, EvolutionGraph, ActivityLog      evolution: capability lineage + log
 ```
+
+## Onboarding system (O1 + O2)
+
+"New session" opens `OnboardingView`, a five-step wizard backed by
+`/onboarding/briefs/*` and `/projects/*` (plans: `docs/plans/O1-onboarding.md`,
+`docs/plans/O2-project-tree-advisor.md`). The steps adapt to what has been
+answered:
+
+1. **Problem statement** — the five questions (definition · why it matters ·
+   prior work + open gap · objective evaluation · data/task/results/permissions)
+   with a completeness dot per question, keywords, and the "Share on the
+   project tree" toggle. Title + question unlock the later steps; questions
+   1–3 register the problem on the org tree when you continue (and start the
+   background advisor — the pill in the header tracks it on every step).
+2. **Data** — upload files/folders to the library, attach them with a
+   description, answer question 4. Every library file has a `get` download.
+3. **Project tree & advisor** — the near-tree (neighbours by relation, confirm /
+   reject / declare relations) and the advisor's cards: statement review
+   (gaps by question with jump links, suggested keywords), related problems,
+   the harness recommendation (Import & switch / Merge into mine → approval
+   card → active version / Switch back), tool imports (checkboxes, role wiring
+   → approval card), the evolution-agent fallback, served-by / cost / re-run.
+4. **Hypotheses** (optional) — the parallel-set search seeded from the whole
+   statement, with the advisor's hint.
+5. **Review & launch** — the exact opening message (now with the harness and
+   the project-tree context), gaps by question, and a warning when an import
+   approval is still pending.
+
+**Projects** in the left rail opens `ProjectTreeView`: every shared problem
+clustered by domain, owner-coloured, status-shaped; a node's statement,
+sessions/outcomes, harness and tools; "Start a subproblem here"; relation
+confirm/reject. Mock mode (`VITE_MOCK=1`) simulates the registry, a canned
+advisor run (~2 s) and the import approval flow.
 
 ## Hypotheses & Evolution
 
 Two distinct left-rail sections:
 
-- **Hypotheses** — the forking research-direction map. The system proposes
-  hypotheses at each fork; the human **pursues** one (which parks its siblings
-  and reveals the next fork), **revisits** a parked branch, or **explores
-  further** from a settled node. A client-side planning artifact.
+- **Hypotheses** — free-form parallel-set exploration backed by the real
+  generator (`POST /hypothesis/sessions`, `…/refine`, `…/select`; Fable with an
+  Opus fallback). State a goal, get a few competing hypotheses, select one or
+  "explore from" one to get a fresh set. The onboarding phase runs the same
+  search seeded from the full problem brief; this page remains for scratch
+  exploration outside a session.
 - **Evolution** — two tabs. **Graph**: the capability lineage — skills the
   system has taught itself, rooted at the harness core and branching by
   direction, each node merged / in-flight / proposed; a proposed skill can

@@ -71,6 +71,37 @@ human ──HTTP──▶ api/server.py ──spawns──▶ research/runtime.p
 - Supervisor's MCP tools: `bus`, `memory`, `hitl`, `fs_read`, `fs_write_workspace`, `Task` (built-in).
 - Subagents inherit those servers; each role's `tools` list in YAML gates what they can call.
 - Evolution agent's tools: `edit`, `bash_ro`, `bash_sandbox`, `run_tests`, `propose_merge`, `memory`.
+- **Onboarding phase (O1).** Sessions normally start from a fixed-format
+  *problem brief* (`api/onboarding.py`, routes under `/onboarding/briefs/*`):
+  define the problem → attach library data → run the hypothesis search →
+  launch. Launch freezes the brief to `state/sessions/<sid>/brief.json`, emits
+  `session.brief`, and passes the rendered brief as the supervisor's first-turn
+  message. The brief is composed **API-side**, not in `research/runtime.py`,
+  because per-user harness roots are frozen forks (see below). Plan:
+  [docs/plans/O1-onboarding.md](docs/plans/O1-onboarding.md).
+- **Onboarding system (O2).** The brief is the five-question statement
+  (definition · why it matters · prior work + open gap · objective evaluation
+  · exact data/task/results/permissions). Questions 1–3 register the problem on
+  the **org-wide project tree** (`api/projects.py`, `state/projects/`, routes
+  under `/projects/*`), a platform registry outside every tenant root with
+  BM25 adjacency + dataset/method edges. A **background advisor**
+  (`api/advisor.py`, prompt `api/prompts/advisor.md`, Fable → Opus via
+  `api/llm.py`) reads the tree and recommends a colleague's evolved harness
+  version and tools; **imports** (`api/imports.py`) fetch the donor's
+  `ver/<id>` tag into the importer's repo, run the smoke + compat gate in a
+  worktree, and open a HITL request in `evo-import-<id>` — the human approves
+  through the normal HITL route; adopt = R17 switch to the fetched commit,
+  merge/tool = fast-forward child version. Cross-tenant reads happen only in
+  `api/` and surface bounded summaries; a donor repo is never written. Plan:
+  [docs/plans/O2-project-tree-advisor.md](docs/plans/O2-project-tree-advisor.md).
+
+**Per-user harness roots are frozen forks.** `api/tenancy.py:ensure_user_root`
+copies `scaffold/`, `research/`, `evolution/`, `tools/`, `roles/`, `prompts/`
+into `state/users/<uid>/root/` **once**, and the runtime subprocesses run from
+that copy (`cwd=ctx.root`, `PYTHONPATH=root`). A later change on `main` to any
+of those dirs does **not** reach existing users; only the shared `api/` is
+always current. Put tenant-independent behaviour in `api/` (or add an explicit
+upgrade path) — don't assume a runtime/prompt edit is live for everyone.
 
 ## Sandboxing layers — invariants future you must preserve
 

@@ -1,8 +1,16 @@
 import { useState } from "react";
 import { useApp } from "../state/store";
+import Markdown from "./Markdown";
+import type { HitlPending } from "../lib/types";
 
-export default function HitlPanel() {
-  const { pending, answer } = useApp();
+type AnswerFn = (requestId: string, decision: "approve" | "reject", note?: string) => Promise<void>;
+
+// Defaults to the research session's pending/answer, but the Evolution tab passes
+// its own (evoPending / answerEvo) so the same approval UI serves both channels.
+export default function HitlPanel({ pending: pendingProp, answer: answerProp }: { pending?: HitlPending[]; answer?: AnswerFn } = {}) {
+  const app = useApp();
+  const pending = pendingProp ?? app.pending;
+  const answer = answerProp ?? app.answer;
   const [note, setNote] = useState("");
 
   if (pending.length === 0) {
@@ -35,10 +43,20 @@ export default function HitlPanel() {
                 <div style={{ marginTop: 5, fontSize: 13, color: "var(--hi)", lineHeight: 1.5 }}>{p.action}</div>
               </>
             )}
+            {p.meta && (
+              <div style={{ marginTop: 6, fontFamily: "var(--mono)", fontSize: 10.5, color: "var(--lo)" }}>{p.meta}</div>
+            )}
             {p.detail && (
-              <div style={{ marginTop: 11, padding: "9px 11px", background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 8, fontFamily: "var(--mono)", fontSize: 11.5, color: "var(--mid)", lineHeight: 1.6, whiteSpace: "pre-wrap" }}>
-                {p.detail}
-              </div>
+              p.detailMarkdown ? (
+                <Markdown
+                  text={p.detail}
+                  style={{ marginTop: 11, padding: "10px 13px", maxHeight: 340, overflowY: "auto", background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 8, fontSize: 12.5, color: "var(--mid)" }}
+                />
+              ) : (
+                <div style={{ marginTop: 11, padding: "9px 11px", background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 8, fontFamily: "var(--mono)", fontSize: 11.5, color: "var(--mid)", lineHeight: 1.6, whiteSpace: "pre-wrap" }}>
+                  {p.detail}
+                </div>
+              )
             )}
             <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 7 }}>
               <span style={{ fontFamily: "var(--mono)", fontSize: 10, color: "var(--lo)" }}>requested by</span>

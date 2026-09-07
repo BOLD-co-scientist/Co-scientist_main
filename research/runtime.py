@@ -31,8 +31,8 @@ from claude_agent_sdk import (
     ToolUseBlock,
 )
 from claude_agent_sdk.types import HookMatcher
-from scaffold import bus, config_loader, eventlog, hitl, settings, skills, spawn, tools_registry
-from scaffold._atomic import read_json
+from scaffold import bus, config_loader, contract, eventlog, hitl, settings, skills, spawn, tools_registry
+from scaffold._atomic import read_json, write_json
 
 
 SUPERVISOR_AGENT_ID = "supervisor"
@@ -182,8 +182,29 @@ def _build_options(
             }
         return _ALLOW
 
+    async def _log_tool_result(hook_input, tool_use_id, context):
+        # Record what a tool CALL produced, paired to its tool.use via `ref`, so
+        # the UI can show the outcome (not just the attempt). Only main-thread
+        # (supervisor) results — subagent tool.use isn't logged here, so their
+        # results would be orphans (agent_id is present inside a Task subagent).
+        if hook_input.get("agent_id"):
+            return {}
+        summary, detail, is_error = _summarize_result(hook_input.get("tool_response"))
+        eventlog.append(
+            session_id,
+            actor=SUPERVISOR_AGENT_ID,
+            kind="tool.result",
+            ref=hook_input.get("tool_use_id") or tool_use_id or "",
+            tool=hook_input.get("tool_name", ""),
+            summary=summary,
+            detail=detail,
+            is_error=is_error,
+        )
+        return {}
+
     hooks = {
         "PreToolUse": [HookMatcher(matcher=None, hooks=[_checkpoint_gate])],
+        "PostToolUse": [HookMatcher(matcher=None, hooks=[_log_tool_result])],
     }
 
     return ClaudeAgentOptions(
@@ -265,6 +286,8 @@ async def _process_message_stream(client, session_id: str, event_state: dict):
                         actor=SUPERVISOR_AGENT_ID,
                         kind="tool.use",
                         tool=block.name,
+                        # ref lets the UI pair this call with its tool.result.
+                        ref=block.id,
                         input_summary=_short_input(block.input),
                     )
         elif isinstance(message, ResultMessage):
@@ -294,6 +317,30 @@ async def run_session(
     rather than an in-memory event, so this can run as a subprocess.
     """
     settings.ensure_session_dirs(session_id)
+
+    # R17: schema-version stamp + read-only guard. A session carries the schema
+    # version of the code that created it. If the ACTIVE code (this subprocess =
+    # the tenant's active version) is OLDER than the session's schema — e.g. the
+    # user rolled back to a version predating a migration — it must not mutate data
+    # it can't fully read: open read-only and let the human fork to continue. A
+    # fresh session stamps the current version. (Additive changes don't bump
+    # SCHEMA_VERSION, so this rarely trips; the compat gate blocks non-additive
+    # merges in the first place — this is the last-resort guard.)
+    schema_path = settings.session_dir(session_id) / "schema.json"
+    _prior_schema = read_json(schema_path, default=None)
+    if isinstance(_prior_schema, dict):
+        _sv = int(_prior_schema.get("schema_version", 1))
+        if _sv > contract.SCHEMA_VERSION:
+            eventlog.append(
+                session_id, actor="system", kind="session.readonly",
+                session_schema=_sv, code_schema=contract.SCHEMA_VERSION,
+                note="session was created by a newer version; fork it to continue on this version",
+            )
+            eventlog.append(session_id, actor="system", kind="session.idle")
+            return
+    else:
+        write_json(schema_path, {"schema_version": contract.SCHEMA_VERSION})
+
     is_first = resume_uuid is None
     if is_first:
         eventlog.append(session_id, actor="system", kind="session.start", task=message)
@@ -559,6 +606,47 @@ def _short_input(payload: Any) -> str:
     except Exception:
         s = str(payload)
     return s
+
+
+def _truncate(s: str, n: int) -> str:
+    s = s or ""
+    return s if len(s) <= n else s[: n - 1] + "…"
+
+
+def _summarize_result(resp: Any) -> tuple[str, str, bool]:
+    """Turn a tool_response of unknown shape into (summary, detail, is_error).
+
+    MCP tools return {"content": [{"type": "text", "text": ...}], "isError": ?};
+    others may return a bare string/list. The detail is capped so a py_exec that
+    prints thousands of rows can't bloat events.jsonl."""
+    is_error = False
+    content: Any = resp
+    if isinstance(resp, dict):
+        is_error = bool(resp.get("isError") or resp.get("is_error"))
+        content = resp.get("content", resp)
+    if isinstance(content, list):
+        parts = []
+        for b in content:
+            if isinstance(b, dict):
+                parts.append(str(b.get("text") or b.get("content") or ""))
+            else:
+                parts.append(str(b))
+        text = "\n".join(p for p in parts if p)
+    elif isinstance(content, str):
+        text = content
+    elif content is None:
+        text = ""
+    else:
+        text = str(content)
+    text = text.strip()
+    detail = _truncate(text, 2000)
+    first = next((ln.strip() for ln in text.split("\n") if ln.strip()), "")
+    if text:
+        nlines = text.count("\n") + 1
+        summary = _truncate(first, 110) or (f"{nlines} lines" if nlines > 1 else f"{len(text)} chars")
+    else:
+        summary = "no output"
+    return summary, detail, is_error
 
 
 async def run_turn(

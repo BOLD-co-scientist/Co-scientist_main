@@ -40,6 +40,15 @@ class SessionSummary(BaseModel):
     last_ts: str | None = None
     last_kind: str | None = None
     running: bool = False
+    # O1 onboarding: set when the session was launched from a problem brief
+    # (state/sessions/<sid>/brief.json). `hypothesis` is the working hypothesis
+    # statement the human selected during onboarding, if any.
+    has_brief: bool = False
+    brief_title: str | None = None
+    hypothesis: str | None = None
+    # R17: True when the session was stamped by a NEWER schema than the active
+    # version can read — it opens read-only and must be forked to continue.
+    readonly: bool = False
 
 
 class HumanDirective(BaseModel):
@@ -115,6 +124,206 @@ class RefineHypothesisRequest(BaseModel):
     parent_id: str
     feedback: str | None = None
     n: int | None = None
+
+
+# ---- Onboarding phase (O1 → O2): the five-question problem brief ----
+# The human defines the problem, attaches data, registers it on the org-wide
+# project tree, reads the advisor, optionally runs the hypothesis search — all
+# BEFORE the research session exists. Launch freezes the brief into the session.
+# Rendering + validation: api/onboarding.py. Registry: api/projects.py.
+# Plans: docs/plans/O1-onboarding.md, docs/plans/O2-project-tree-advisor.md.
+
+
+class BriefDataItem(BaseModel):
+    path: str  # library-relative POSIX path (e.g. "panel/ic50.csv")
+    description: str = ""
+    # Stamped by the server when the path is resolved (preview / launch);
+    # ignored on input.
+    size: int | None = None
+    is_dir: bool = False
+    file_count: int | None = None
+    files: list[str] | None = None  # bounded inner listing for folders
+
+
+class ProblemBrief(BaseModel):
+    """The fixed format (brief v2). Every field is optional while drafting;
+    `title` and `research_question` are required to launch; questions 1–3
+    (significance, prior_work, open_gap, evaluation_protocol) are required to
+    register on the project tree."""
+
+    title: str = ""
+    domain: str = ""
+    research_question: str = ""
+    objectives: list[str] = []
+    # Q1
+    significance: str = ""
+    # Q2 (`background` is the O1 name; still accepted, read into prior_work)
+    prior_work: str = ""
+    open_gap: str = ""
+    background: str | None = None
+    # Q3
+    evaluation_protocol: str = ""
+    success_criteria: str = ""
+    # Q4
+    data: list[BriefDataItem] = []
+    task_definition: str = ""
+    existing_results: str = ""
+    data_access: str = ""
+    data_notes: str = ""
+    # session-private
+    constraints: str = ""
+    deliverables: list[str] = []
+    # project tree
+    keywords: list[str] = []
+    visibility: str = "org"  # "org" | "private"
+    parent_node: str | None = None
+
+
+class BriefPatch(BaseModel):
+    """Partial update: only the fields present are changed."""
+
+    title: str | None = None
+    domain: str | None = None
+    research_question: str | None = None
+    objectives: list[str] | None = None
+    significance: str | None = None
+    prior_work: str | None = None
+    open_gap: str | None = None
+    background: str | None = None
+    evaluation_protocol: str | None = None
+    success_criteria: str | None = None
+    data: list[BriefDataItem] | None = None
+    task_definition: str | None = None
+    existing_results: str | None = None
+    data_access: str | None = None
+    data_notes: str | None = None
+    constraints: str | None = None
+    deliverables: list[str] | None = None
+    keywords: list[str] | None = None
+    visibility: str | None = None
+    parent_node: str | None = None
+
+
+class BriefHypothesis(BaseModel):
+    id: str | None = None
+    statement: str
+    rationale: str = ""
+    note: str | None = None
+
+
+class BriefHarness(BaseModel):
+    """The harness a session runs on, stamped at launch (O2)."""
+
+    version_id: str | None = None
+    summary: str | None = None
+    sha: str | None = None
+    imported_from: dict[str, Any] | None = None
+    tools: list[str] = []
+    custom_tools: list[str] = []
+    roles: list[str] = []
+
+
+class BriefRecord(ProblemBrief):
+    id: str
+    status: str  # "draft" | "launched"
+    created: str
+    updated: str
+    hypothesis_session_id: str | None = None
+    hypothesis: BriefHypothesis | None = None
+    session_id: str | None = None
+    node_id: str | None = None
+    harness: BriefHarness | None = None
+    tree_context: str | None = None
+    schema_version: int = 2
+
+
+class QuestionCompleteness(BaseModel):
+    q: int
+    label: str
+    filled: bool
+    missing: list[str] = []
+
+
+class BriefSummary(BaseModel):
+    id: str
+    title: str
+    research_question: str = ""
+    domain: str = ""
+    keywords: list[str] = []
+    status: str
+    created: str | None = None
+    updated: str | None = None
+    session_id: str | None = None
+    hypothesis_session_id: str | None = None
+    hypothesis: str | None = None
+    data_count: int = 0
+    visibility: str = "org"
+    node_id: str | None = None
+    parent_node: str | None = None
+    registrable: bool = False
+    completeness: list[QuestionCompleteness] = []
+
+
+class BriefHypothesesRequest(BaseModel):
+    n: int | None = None
+
+
+class LaunchBriefRequest(BaseModel):
+    autonomous: bool = False
+
+
+class LaunchBriefResponse(BaseModel):
+    session_id: str
+    task: str
+    brief_id: str
+    node_id: str | None = None
+
+
+class BriefPreview(BaseModel):
+    text: str  # the exact first-turn message the supervisor will receive
+    missing: list[str]  # required fields still empty
+    data_problems: list[str] = []  # attached paths that would fail at launch
+    size_bytes: int = 0  # UTF-8 size of `text` (it travels as one argv element)
+    max_bytes: int = 0
+    too_large: bool = False
+    # O2: what still blocks registration/sharing, and whether an import
+    # approval is pending (launch warns; it does not block).
+    missing_for_registration: list[str] = []
+    pending_imports: list[str] = []
+    completeness: list[QuestionCompleteness] = []
+
+
+class RegisterBriefRequest(BaseModel):
+    visibility: str | None = None
+
+
+# ---- Project tree (O2) ----
+
+
+class NodePatch(BaseModel):
+    status: str | None = None  # registered | active | solved | abandoned | superseded
+    visibility: str | None = None
+    keywords: list[str] | None = None
+
+
+class EdgeDeclare(BaseModel):
+    dst: str
+    type: str = "adjacent"  # adjacent | subproblem | shares_dataset | shares_method | supersedes
+    rationale: str = ""
+
+
+class ImportRequest(BaseModel):
+    kind: str  # "harness" | "tool"
+    owner: str  # user id of the donor tenant
+    version_id: str
+    mode: str | None = None  # harness: "adopt" | "merge"
+    tools: list[str] | None = None  # tool import: tool package names
+    roles: list[str] | None = None  # tool import: roles to wire the tools into
+    include_skills: list[str] | None = None  # harness adopt: donor skills to copy
+
+
+class VersionShare(BaseModel):
+    shared: bool = True
 
 
 class HitlAnswer(BaseModel):
