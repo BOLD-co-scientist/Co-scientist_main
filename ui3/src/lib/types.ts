@@ -153,6 +153,8 @@ export interface HitlPending {
   // Optional one-line context shown under the action (e.g. "20 events").
   meta?: string;
   created?: string;
+  /** R19: the independent judge's gate-2 review of this request, when it has run. */
+  judge?: JudgeVerdict;
 }
 
 export type HitlDecision = "approve" | "reject";
@@ -313,4 +315,126 @@ export interface Skill {
   adds: string;
   desc: string;
   sha?: string;
+}
+
+// ---- R19: guided evolution search (goal ledger, planner proposals, judge, modes) ----
+// Mirrors api/evo_store.py / api/goals.py / api/judge.py records.
+export type EvoMode = "manual" | "automatic";
+
+export interface JudgeVerdict {
+  stage: string; // "proposal" (gate 1) | "merge" (gate 2)
+  verdict: "approve" | "decline" | "unavailable";
+  score: number;
+  why: string;
+  risks: string[];
+  recommendation: string;
+  served_by: string;
+  error?: string | null;
+  at?: string;
+  mode?: string;
+  request_id?: string;
+}
+
+export type SubgoalStatus = "pending" | "current" | "done" | "skipped";
+export interface EvoSubgoal {
+  id: string;
+  order: number;
+  text: string;
+  acceptance: string[];
+  capabilities_needed: string[];
+  status: SubgoalStatus;
+}
+export interface EvoWishlistItem {
+  name: string;
+  why: string;
+  candidates: string[];
+  status: string; // missing | present:<tool> | proposed:<pid> | version:<id>
+}
+export interface EvoDrift {
+  id: string;
+  question: string;
+  inferred_current: string | null;
+  declared_current: string | null;
+  why: string;
+  asked_at: string;
+  answered: { changed: boolean; note: string; at: string } | null;
+}
+export interface GoalLedger {
+  brief_id: string;
+  title: string;
+  research_question: string;
+  approach_hints: string;
+  subgoals: EvoSubgoal[];
+  capability_wishlist: EvoWishlistItem[];
+  current: string | null;
+  inferred_current: string | null;
+  phase: { inferred_current?: string | null; confidence?: number; evidence?: string; plan_changed?: boolean; why?: string; at?: string } | null;
+  drift: EvoDrift | null;
+  drift_history?: unknown[];
+  researcher_ordered: boolean;
+  derived: { served_by?: string | null; error?: string | null; at?: string } | null;
+  updated?: string;
+}
+export interface GoalsPatch {
+  approach_hints?: string;
+  subgoals?: { id?: string; text: string; acceptance?: string[]; capabilities_needed?: string[]; status?: SubgoalStatus }[];
+  order?: string[];
+  current?: string;
+}
+
+export type ProposalStatus = "proposed" | "declined" | "queued" | "implementing" | "merged" | "rejected" | "ended";
+export interface EvoProposalNode {
+  id: string;
+  brief_id: string;
+  run_id: string;
+  parent_version: string | null;
+  title: string;
+  scope: "harness" | "platform";
+  direction: string; // agents | workflow | tools | methodology | memory | ui | import
+  goal_ids: string[];
+  rationale: string;
+  command: string;
+  expected_gain: string;
+  cost: string;
+  why_now: string;
+  provenance?: string[];
+  status: ProposalStatus;
+  judge: JudgeVerdict | null;
+  human: { decision: string; note: string; at: string; edited?: boolean } | null;
+  session_id: string | null;
+  version_id: string | null;
+  created: string;
+  updated?: string;
+  error?: string;
+  launched_by?: string;
+}
+export interface ProposalList {
+  proposals: EvoProposalNode[];
+  latest_run: { id: string; created: string; trigger: string; served_by?: string | null; error?: string | null; phase?: unknown; drift_opened?: boolean } | null;
+  running: boolean;
+  mode: EvoMode;
+  evolution_running: boolean;
+}
+export interface EvoModeInfo {
+  mode: EvoMode;
+  updated?: string | null;
+  judge: { available: boolean; model: string };
+}
+export interface CalibrationGate {
+  pairs: number;
+  agreement: number | null;
+  judge_accept_rate: number | null;
+  human_accept_rate: number | null;
+  disagreements: { proposal_id: string; judge: string; human: string }[];
+}
+export interface JudgeInfo {
+  available: boolean;
+  model: string;
+  calibration: { n_proposals: number; gate1: CalibrationGate; gate2: CalibrationGate };
+}
+export interface DecideResult {
+  ok: boolean;
+  status: string;
+  launched: { proposal_id: string; session_id: string }[];
+  queued: string[];
 }

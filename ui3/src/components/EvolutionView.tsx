@@ -5,6 +5,7 @@ import type { Ev } from "../lib/types";
 import EvolutionCanvas from "./EvolutionGraph";
 import EventItem from "./EventItem";
 import HitlPanel from "./HitlPanel";
+import PlannerPanel from "./PlannerPanel";
 
 // R17 Evolution surface: ONE zoomable version tree (the whole canvas) + ONE
 // on-demand conversation drawer that slides in over it. No sub-tabs, no fixed
@@ -27,7 +28,7 @@ function ConversationDrawer({
   clearBase: () => void;
   onExitStory: () => void;
 }) {
-  const { api, evoEvents, evoPending, evoRunning, startEvolution, answerEvo } = useApp();
+  const { api, evoEvents, evoPending, evoRunning, startEvolution, answerEvo, evolutionProposalId, setEvolutionProposalId } = useApp();
   const [cmd, setCmd] = useState("");
   const [storyEvents, setStoryEvents] = useState<Ev[]>([]);
   const scroller = useRef<HTMLDivElement | null>(null);
@@ -54,9 +55,10 @@ function ConversationDrawer({
   const submit = () => {
     const c = cmd.trim();
     if (!c || evoRunning) return;
-    void startEvolution(c, base?.sha);
+    void startEvolution(c, base?.sha, evolutionProposalId ?? undefined);
     setCmd("");
     clearBase();
+    setEvolutionProposalId(null);
   };
 
   return (
@@ -73,6 +75,13 @@ function ConversationDrawer({
             <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
               Read-only provenance · <span style={{ fontFamily: "var(--mono)" }}>{story.label}</span>
             </span>
+          </div>
+        ) : evolutionProposalId ? (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 16px", background: "var(--evo-soft)", borderBottom: "1px solid var(--border)", fontSize: 11.5, color: "var(--evo)" }}>
+            <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              Implements planner proposal <span style={{ fontFamily: "var(--mono)" }}>{evolutionProposalId}</span> — edit freely, then Evolve
+            </span>
+            <button onClick={() => setEvolutionProposalId(null)} style={{ flex: "0 0 auto", color: "var(--mid)", fontSize: 11 }}>unlink</button>
           </div>
         ) : base ? (
           <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 16px", background: "var(--evo-soft)", borderBottom: "1px solid var(--border)", fontSize: 11.5, color: "var(--evo)" }}>
@@ -133,6 +142,7 @@ export default function EvolutionView() {
   const [base, setBase] = useState<{ sha: string; label: string } | null>(null);
   const [story, setStory] = useState<{ sid: string; label: string } | null>(null);
   const [seed, setSeed] = useState("");
+  const [planOpen, setPlanOpen] = useState(true);
 
   // A reflection suggestion routes here with a prefilled command → open the
   // drawer and seed it (consume the store field once).
@@ -166,6 +176,12 @@ export default function EvolutionView() {
           </div>
         </div>
         <button
+          onClick={() => setPlanOpen((v) => !v)}
+          style={{ flex: "0 0 auto", padding: "8px 14px", borderRadius: 9, fontSize: 12.5, fontWeight: 700, background: planOpen ? "var(--bg2)" : "var(--evo-soft)", color: planOpen ? "var(--mid)" : "var(--evo)", border: "1px solid var(--border)" }}
+        >
+          {planOpen ? "Hide plan" : "Plan"}
+        </button>
+        <button
           onClick={() => { if (drawerOpen) { setDrawerOpen(false); setBase(null); setStory(null); } else { setStory(null); setDrawerOpen(true); } }}
           style={{ flex: "0 0 auto", padding: "8px 14px", borderRadius: 9, fontSize: 12.5, fontWeight: 700, background: drawerOpen ? "var(--bg2)" : "var(--evo)", color: drawerOpen ? "var(--mid)" : "#100a1c", border: drawerOpen ? "1px solid var(--border)" : "none" }}
         >
@@ -174,6 +190,7 @@ export default function EvolutionView() {
       </div>
 
       <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
+        <PlannerPanel open={planOpen} onOpenDrawer={() => { setStory(null); setDrawerOpen(true); }} />
         <EvolutionCanvas onEvolveFrom={evolveFrom} onViewConversation={viewConversation} />
         <ConversationDrawer
           open={drawerOpen}

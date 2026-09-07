@@ -19,6 +19,15 @@ import type {
   MemorySearchResult,
   Reflection,
   RoleSummary,
+  // R19
+  DecideResult,
+  EvoMode,
+  EvoModeInfo,
+  GoalLedger,
+  GoalsPatch,
+  JudgeInfo,
+  JudgeVerdict,
+  ProposalList,
   SendResult,
   SessionBrief,
   SessionFile,
@@ -74,9 +83,20 @@ export interface Api {
   ): Promise<MemorySearchResult>;
   gitHistory(limit?: number): Promise<GitHistory>;
   getCommit(sha: string): Promise<CommitDetail>;
-  spawnEvolution(command: string, base?: string): Promise<{ session_id: string; command: string }>;
+  spawnEvolution(command: string, base?: string, proposalId?: string, scope?: string): Promise<{ session_id: string; command: string }>;
   versions(): Promise<VersionList>;
   activateVersion(id: string): Promise<VersionList>;
+  // ---- R19 guided evolution search: goal ledger, planner, judge, modes ----
+  evoMode(): Promise<EvoModeInfo>;
+  setEvoMode(mode: EvoMode): Promise<EvoModeInfo>;
+  judgeInfo(): Promise<JudgeInfo>;
+  getGoals(bid: string): Promise<GoalLedger>;
+  deriveGoals(bid: string, hints?: string, keepSubgoals?: boolean): Promise<GoalLedger>;
+  updateGoals(bid: string, patch: GoalsPatch): Promise<GoalLedger>;
+  answerDrift(bid: string, changed: boolean, note?: string): Promise<GoalLedger>;
+  plan(bid: string, trigger?: string): Promise<{ ok: boolean; status: string }>;
+  listProposals(bid?: string): Promise<ProposalList>;
+  decideProposal(pid: string, decision: "pick" | "both" | "decline", note?: string, withId?: string): Promise<DecideResult>;
   // ---- hypothesis engine (parallel-set flow) ----
   startHypothesis(goal: string, n?: number): Promise<HypSession>;
   refineHypothesis(hid: string, parentId: string, feedback?: string, n?: number): Promise<HypSession>;
@@ -189,6 +209,8 @@ function mapPending(r: Raw): HitlPending {
     title: (r.summary as string) ?? kind ?? "Approval required",
     requester: (r.requester as string) ?? undefined,
     created: (r.ts as string) ?? undefined,
+    // R19: the judge's gate-2 review rides on the pending record when it has run.
+    judge: (r.judge as JudgeVerdict | undefined) ?? undefined,
   };
   const p =
     payload && typeof payload === "object" && !Array.isArray(payload)
@@ -572,10 +594,36 @@ export function createApi(cfg: ApiConfig): Api {
     activateVersion: (id) =>
       req<VersionList>(`/versions/${encodeURIComponent(id)}/activate`, { method: "POST" }),
 
-    spawnEvolution: (command, base) =>
+    spawnEvolution: (command, base, proposalId, scope) =>
       req<{ session_id: string; command: string }>("/evolution/commands", {
         method: "POST",
-        body: JSON.stringify({ command, base }),
+        body: JSON.stringify({ command, base, proposal_id: proposalId, scope: scope ?? "harness" }),
+      }),
+
+    // ---- R19 guided evolution search ----
+    evoMode: () => req<EvoModeInfo>("/evolution/mode"),
+    setEvoMode: (mode) => req<EvoModeInfo>("/evolution/mode", { method: "PUT", body: JSON.stringify({ mode }) }),
+    judgeInfo: () => req<JudgeInfo>("/evolution/judge"),
+    getGoals: (bid) => req<GoalLedger>(`/evolution/goals/${encodeURIComponent(bid)}`),
+    deriveGoals: (bid, hints, keepSubgoals) =>
+      req<GoalLedger>(`/evolution/goals/${encodeURIComponent(bid)}/derive`, {
+        method: "POST",
+        body: JSON.stringify({ approach_hints: hints ?? undefined, keep_subgoals: keepSubgoals ?? undefined }),
+      }),
+    updateGoals: (bid, patch) =>
+      req<GoalLedger>(`/evolution/goals/${encodeURIComponent(bid)}`, { method: "PUT", body: JSON.stringify(patch) }),
+    answerDrift: (bid, changed, note) =>
+      req<GoalLedger>(`/evolution/goals/${encodeURIComponent(bid)}/drift/answer`, {
+        method: "POST",
+        body: JSON.stringify({ changed, note: note ?? "" }),
+      }),
+    plan: (bid, trigger = "manual") =>
+      req<{ ok: boolean; status: string }>("/evolution/plan", { method: "POST", body: JSON.stringify({ brief_id: bid, trigger }) }),
+    listProposals: (bid) => req<ProposalList>(`/evolution/proposals${bid ? `?brief_id=${encodeURIComponent(bid)}` : ""}`),
+    decideProposal: (pid, decision, note, withId) =>
+      req<DecideResult>(`/evolution/proposals/${encodeURIComponent(pid)}/decide`, {
+        method: "POST",
+        body: JSON.stringify({ decision, note: note ?? undefined, with_id: withId ?? undefined }),
       }),
     // ---- hypothesis engine ---- (generation can take 10-30s; no special timeout needed)
     startHypothesis: (goal, n) =>

@@ -100,8 +100,14 @@ interface AppCtx {
   evoRunning: boolean;
   evolutionCommand: string;
   setEvolutionCommand: (command: string) => void;
-  startEvolution: (command: string, base?: string) => Promise<void>;
+  startEvolution: (command: string, base?: string, proposalId?: string) => Promise<void>;
   answerEvo: (requestId: string, decision: "approve" | "reject", note?: string) => Promise<void>;
+  // R19: adopt an evolution session the server launched (a picked or judge-approved
+  // proposal) as the drawer's channel; a composer seed may carry the proposal it
+  // implements so the launch is linked back to the plan.
+  adoptEvolution: (sessionId: string) => Promise<void>;
+  evolutionProposalId: string | null;
+  setEvolutionProposalId: (id: string | null) => void;
 
   // ---- R16: reflection for the active research session. `reflection` seeds the
   // Evolution-tab suggestion cards; `reflectionNudge` is the same but null once
@@ -187,6 +193,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [evoEvents, setEvoEvents] = useState<Ev[]>([]);
   const [evoPending, setEvoPending] = useState<HitlPending[]>([]);
   const [evolutionCommand, setEvolutionCommand] = useState("");
+  const [evolutionProposalId, setEvolutionProposalId] = useState<string | null>(null);
   const evoStreamRef = useRef<StreamHandle | null>(null);
   const evoActiveIdRef = useRef<string | null>(null);
   evoActiveIdRef.current = evoActiveId;
@@ -739,25 +746,33 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   );
 
   // ---- evolution actions ----
+  const adoptEvolution = useCallback(
+    async (session_id: string) => {
+      localStorage.setItem(EVO_KEY, session_id);
+      setEvoEvents([]);
+      setEvoPending([]);
+      setEvoActiveId(session_id);
+      await refreshSessions();
+    },
+    [refreshSessions],
+  );
+
   const startEvolution = useCallback(
     // `base` (R17): branch the evolution from a specific node instead of the
     // active tip. Either way the new evo-* session is adopted as the drawer's
     // channel — it is NEVER routed into the research session rail.
-    async (command: string, base?: string) => {
+    // `proposalId` (R19): the planner proposal this command implements.
+    async (command: string, base?: string, proposalId?: string) => {
       const cmd = command.trim();
       if (!cmd) return;
       try {
-        const { session_id } = await api.spawnEvolution(cmd, base);
-        localStorage.setItem(EVO_KEY, session_id);
-        setEvoEvents([]);
-        setEvoPending([]);
-        setEvoActiveId(session_id);
-        await refreshSessions();
+        const { session_id } = await api.spawnEvolution(cmd, base, proposalId);
+        await adoptEvolution(session_id);
       } catch {
         /* ignore */
       }
     },
-    [api, refreshSessions],
+    [api, adoptEvolution],
   );
 
   const answerEvo = useCallback(
@@ -983,6 +998,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setEvolutionCommand,
     startEvolution,
     answerEvo,
+    adoptEvolution,
+    evolutionProposalId,
+    setEvolutionProposalId,
     reflection,
     reflectionNudge,
     dismissReflection,

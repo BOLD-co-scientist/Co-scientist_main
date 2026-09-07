@@ -353,6 +353,27 @@ export function toVM(e: Ev, prev?: Ev, ctx?: VMCtx): EventVM {
     return { variant: "spine", id: e.id, time, kind: e.kind, title: decided, dot: decision === "reject" ? "var(--err)" : "var(--ok)" };
   }
 
+  // R19: the independent judge's reviews / decisions (gate 1 + gate 2) and the
+  // automatic answers it (or autonomous mode) writes — spine lines that say WHY.
+  if (e.kind === "judge.review" || e.kind === "evolution.judge_approved" || e.kind === "judge.deferred_to_human") {
+    const verdict = s("verdict");
+    const why = firstStr("why", "recommendation", "note", "error");
+    const head =
+      e.kind === "judge.review"
+        ? `judge: ${verdict ?? "review"}`
+        : e.kind === "evolution.judge_approved"
+          ? "judge approved this evolution"
+          : "judge deferred the decision to you";
+    return { variant: "spine", id: e.id, time, kind: e.kind, title: why ? `${head} · ${why}` : head, dot: verdict === "decline" ? "var(--err)" : "var(--warn)" };
+  }
+  if (e.kind === "hitl.auto_answer") {
+    const decision = s("decision");
+    const who = e.actor === "judge" ? "The judge" : "Autonomous mode";
+    const note = firstStr("note");
+    const verb = decision === "approve" ? "approved" : decision === "reject" ? "rejected" : "answered";
+    return { variant: "spine", id: e.id, time, kind: e.kind, title: note ? `${who} ${verb} the request · ${note}` : `${who} ${verb} the request.`, dot: decision === "reject" ? "var(--err)" : "var(--ok)" };
+  }
+
   // All long-job kinds → a job chip.
   if (e.kind.startsWith("longjob") ) {
     const state = e.kind.split(/[._]/).pop();

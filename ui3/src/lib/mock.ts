@@ -5,7 +5,9 @@ import type {
   GitHistory,
   HitlPending,
   EvoLogEntry,
+  GoalLedger,
   HypSession,
+  ProposalList,
   LibraryFile,
   RoleSummary,
   SessionSummary,
@@ -216,6 +218,55 @@ const MOCK_HYP_STORE: Array<{
   rounds: Array<{ round: number; parent_id: string | null; feedback: string | null; served_by: string; hypotheses: Array<{ id: string; statement: string; rationale: string; round: number; parent_id?: string | null }> }>;
 }> = [];
 
+// ---- R19 mock: one derived ledger + two judged proposals for design review ----
+function mockLedger(bid: string): GoalLedger {
+  return {
+    brief_id: bid,
+    title: "Kinase selectivity of CX-14",
+    research_question: "Which off-targets explain the CX-14 phenotype?",
+    approach_hints: "Start from the panel Kd data; dock only the top-5 candidates.",
+    subgoals: [
+      { id: "g1", order: 1, text: "Clean the panel data and compute S(10)", acceptance: ["selectivity table in results/"], capabilities_needed: ["py_exec"], status: "done" },
+      { id: "g2", order: 2, text: "Dock CX-14 against the top-5 off-targets", acceptance: ["a pose per target with a score"], capabilities_needed: ["GPU docking runner", "pose viewer"], status: "current" },
+      { id: "g3", order: 3, text: "Write the report with figures", acceptance: ["results/report.pdf compiles"], capabilities_needed: ["latex_compile"], status: "pending" },
+    ],
+    capability_wishlist: [
+      { name: "pose viewer", why: "g2 produces poses nobody can look at", candidates: ["py3Dmol", "NGL viewer"], status: "missing" },
+      { name: "latex_compile", why: "the report must compile", candidates: [], status: "present:latex_compile" },
+    ],
+    current: "g2",
+    inferred_current: "g2",
+    phase: { confidence: 0.8, evidence: "the last session docked two targets", plan_changed: false, why: "" },
+    drift: null,
+    researcher_ordered: true,
+    derived: { served_by: "claude-opus-4-8", error: null, at: "2026-07-09 10:00:00" },
+  };
+}
+const MOCK_PROPOSALS: ProposalList = {
+  proposals: [
+    {
+      id: "p_1", brief_id: "b_mock", run_id: "run_1", parent_version: null, title: "Add a pose viewer tool", scope: "harness", direction: "tools",
+      goal_ids: ["g2"], rationale: "Subgoal g2 produces poses and nothing renders them; the wishlist marks a pose viewer missing.",
+      command: "Create tools/pose_viewer/server.py wrapping py3Dmol to render a PDB/SDF pose into an HTML file under results/; register it for data_analyst; add tests/test_pose_viewer.py.",
+      expected_gain: "high", cost: "medium", why_now: "g2 is current", status: "proposed",
+      judge: { stage: "proposal", verdict: "approve", score: 0.86, why: "Directly serves the current subgoal; small blast radius.", risks: ["py3Dmol must be vendored into the tool env"], recommendation: "Approve — serves g2, low risk", served_by: "mock-judge" },
+      human: null, session_id: null, version_id: null, created: "2026-07-09 10:01:00",
+    },
+    {
+      id: "p_2", brief_id: "b_mock", run_id: "run_1", parent_version: null, title: "Add a docking results dashboard to the UI", scope: "platform", direction: "ui",
+      goal_ids: ["g2"], rationale: "Poses and scores across targets are easier to compare in one table with the viewer inline.",
+      command: "Add ui3/src/components/DockingDashboard.tsx listing results/*.pose.html with scores; mount it in FilesPanel; npm run build must pass.",
+      expected_gain: "medium", cost: "high", why_now: "g2 is current", status: "proposed",
+      judge: { stage: "proposal", verdict: "decline", score: 0.35, why: "Useful later, but the viewer tool comes first and this is a large platform change.", risks: ["large diff"], recommendation: "Decline for now — do the viewer first", served_by: "mock-judge" },
+      human: null, session_id: null, version_id: null, created: "2026-07-09 10:01:05",
+    },
+  ],
+  latest_run: { id: "run_1", created: "2026-07-09 10:01:00", trigger: "research.complete", served_by: "claude-opus-4-8", error: null },
+  running: false,
+  mode: "manual",
+  evolution_running: false,
+};
+
 export function createMockApi(): Api {
   const sessions = clone(SESSIONS);
   const events: Record<string, Ev[]> = clone(EVENTS);
@@ -409,6 +460,22 @@ export function createMockApi(): Api {
     spawnEvolution: (command) => delay({ session_id: "evo-mock-1", command }),
     versions: () => delay({ versions: [], active: null }),
     activateVersion: (_id) => delay({ versions: [], active: null }),
+
+    // ---- R19 guided evolution search (mock) ----
+    evoMode: () => delay({ mode: MOCK_PROPOSALS.mode, judge: { available: true, model: "mock-judge" } }),
+    setEvoMode: (mode) => { MOCK_PROPOSALS.mode = mode; return delay({ mode, judge: { available: true, model: "mock-judge" } }); },
+    judgeInfo: () => delay({ available: true, model: "mock-judge", calibration: { n_proposals: 2, gate1: { pairs: 1, agreement: 1, judge_accept_rate: 1, human_accept_rate: 1, disagreements: [] }, gate2: { pairs: 0, agreement: null, judge_accept_rate: null, human_accept_rate: null, disagreements: [] } } }),
+    getGoals: (bid) => delay(mockLedger(bid)),
+    deriveGoals: (bid) => delay(mockLedger(bid), 900),
+    updateGoals: (bid, patch) => { const l = mockLedger(bid); if (patch.approach_hints != null) l.approach_hints = patch.approach_hints; if (patch.current) l.current = patch.current; return delay(l); },
+    answerDrift: (bid) => delay(mockLedger(bid)),
+    plan: () => delay({ ok: true, status: "started" }, 400),
+    listProposals: () => delay(clone(MOCK_PROPOSALS)),
+    decideProposal: (pid, decision) => {
+      const p = MOCK_PROPOSALS.proposals.find((x) => x.id === pid);
+      if (p) p.status = decision === "decline" ? "declined" : "implementing";
+      return delay({ ok: true, status: decision === "decline" ? "declined" : "launched", launched: decision === "decline" ? [] : [{ proposal_id: pid, session_id: "evo-mock-1" }], queued: [] });
+    },
 
     // ---- hypothesis engine (mock: canned parallel sets, deterministic) ----
     startHypothesis: (goal, n = 4) => mockStartHypothesis(goal, n),
