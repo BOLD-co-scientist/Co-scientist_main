@@ -1857,13 +1857,51 @@ async def _after_evolution(ctx: UserContext, sid: str) -> None:
     await _launch_next_queued(ctx)
 
 
+def _backfill_merge_payload(ctx: UserContext, payload: dict) -> dict:
+    """Fill in what an OLDER tenant's ``propose_merge`` does not send.
+
+    Tenant roots are frozen forks (api/tenancy.py), so a fix to the tenant-side
+    merge tool only reaches tenants created afterwards. A tenant on the pre-R19
+    tool sends no ``smoke`` and no ``summary``, and the gate-2 judge then has to
+    treat the smoke result as UNKNOWN — which it correctly refuses to approve
+    around. The archive directory the payload points at is inside this tenant's
+    own state and DOES carry the evidence, so read it here instead of trusting
+    (or missing) the payload.
+    """
+    payload = dict(payload or {})
+    archive_dir = payload.get("archive")
+    if payload.get("smoke") is not None or not isinstance(archive_dir, str):
+        return payload
+    try:
+        d = Path(archive_dir).resolve()
+        if not d.is_dir() or ctx.root.resolve() not in d.parents:
+            return payload  # never read outside this tenant's own root
+        log = d / "smoke.log"
+        if log.exists():
+            tail = log.read_text(encoding="utf-8", errors="replace")[-4000:]
+            ok = bool(re.search(r"\b\d+ passed\b", tail)) and not re.search(r"\b\d+ (failed|error)", tail)
+            payload["smoke"] = {"ran": True, "ok": ok, "source": "archive/smoke.log"}
+        elif not payload.get("strict"):
+            payload["smoke"] = {"ran": False, "source": "archive"}
+        if not payload.get("summary"):
+            rationale = d / "rationale.md"
+            if rationale.exists():
+                first = rationale.read_text(encoding="utf-8", errors="replace").lstrip().splitlines()
+                if first:
+                    payload["summary"] = first[0].lstrip("# ").strip()[:300]
+    except Exception:  # noqa: BLE001 — best effort; the judge still sees UNKNOWN
+        pass
+    return payload
+
+
 async def _judge_merge_request(ctx: UserContext, sid: str, rid: str, rec: dict, counter: dict) -> None:
     judge = _judge_for(ctx)
     mode = evo_store.load_settings(ctx.state)["mode"]
     prop = evo_store.proposal_for_session(ctx.state, sid)
     ledger = evo_store.load_goals(ctx.state, prop["brief_id"]) if prop and prop.get("brief_id") else None
+    payload = _backfill_merge_payload(ctx, rec.get("payload") or {})
     verdict = await judge.judge_merge(
-        rec.get("payload") or {}, proposal=prop,
+        payload, proposal=prop,
         goals=_goals.render_for_prompt(ledger) if ledger else "",
         inventory=_goals.render_inventory(_goals.harness_inventory(ctx.root)),
         tree=_planner.tree_text(ctx.root, ctx.state),
@@ -1882,7 +1920,7 @@ async def _judge_merge_request(ctx: UserContext, sid: str, rid: str, rec: dict, 
     # Dockerfile get a STRICTER human gate — they are the gate machinery itself.
     # Automatic mode never answers those; the judge's review still shows on the
     # card, and the human decides.
-    if rec.get("payload", {}).get("strict") and not settings.JUDGE_MAY_ANSWER_STRICT:
+    if payload.get("strict") and not settings.JUDGE_MAY_ANSWER_STRICT:
         _append_event(
             ctx, sid, actor="judge", kind="judge.deferred_to_human", ref=rid,
             why=("This merge touches the gate machinery (scaffold/, evolution/, pyproject.toml or "
@@ -2001,12 +2039,33 @@ def evo_judge(ctx: UserContext = Depends(_ctx)):
 
 @app.get("/evolution/goals")
 def evo_goals_list(ctx: UserContext = Depends(_ctx)):
-    return [_goals.summary(l) for l in evo_store.list_goals(ctx.state)]
+    inv = _goals.harness_inventory(ctx.root)
+    out = []
+    for led in evo_store.list_goals(ctx.state):
+        _goals.refresh_wishlist_status(led, inv, evo_store.list_proposals(ctx.state, brief_id=led.get("brief_id")))
+        out.append(_goals.summary(led))
+    return out
 
 
 @app.get("/evolution/goals/{bid}")
 def evo_goals_get(bid: str, ctx: UserContext = Depends(_ctx)):
     ledger, _brief = _ledger_or_404(ctx, bid)
+    # Recompute present/missing on READ. The statuses are a view of the current
+    # harness, not stored facts: a capability the researcher merged five minutes
+    # ago must not still read "missing" until the next planner run.
+    _refresh_wishlist(ctx, bid, ledger)
+    return ledger
+
+
+def _refresh_wishlist(ctx: UserContext, bid: str, ledger: dict) -> dict:
+    before = [w.get("status") for w in ledger.get("capability_wishlist", [])]
+    _goals.refresh_wishlist_status(ledger, _goals.harness_inventory(ctx.root), evo_store.list_proposals(ctx.state, brief_id=bid))
+    after = [w.get("status") for w in ledger.get("capability_wishlist", [])]
+    if before != after and ledger.get("brief_id"):
+        try:
+            evo_store.save_goals(ctx.state, ledger)
+        except Exception:  # noqa: BLE001 — a read must never fail on a write
+            pass
     return ledger
 
 

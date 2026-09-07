@@ -671,3 +671,45 @@ def test_restart_reconciliation_unsticks_implementing_proposals(api):
     assert es.load_proposal(ctx.state, t["id"])["status"] == "implementing"
     api["client"].get(f"/evolution/proposals?brief_id={bid}", headers=api["headers"])
     _wait(lambda: es.load_proposal(ctx.state, t["id"])["status"] == "merged")
+
+
+def test_gate2_backfills_smoke_from_the_archive_for_an_older_tenant(api):
+    """Tenant roots are frozen forks, so a tenant on the pre-R19 merge tool sends
+    no `smoke` key. The archive directory it points at holds the evidence; the
+    API must read it rather than leaving the judge with UNKNOWN."""
+    server, ctx = api["server"], api["ctx"]
+    arch = ctx.root / "state" / "archive" / "evolutions" / "20260101-000000__x"
+    arch.mkdir(parents=True, exist_ok=True)
+    (arch / "smoke.log").write_text("......\n12 passed, 1 skipped in 3.2s\n", encoding="utf-8")
+    (arch / "rationale.md").write_text("# Add struct_view tool\n\nbecause…\n", encoding="utf-8")
+    out = server._backfill_merge_payload(ctx, {"archive": str(arch), "strict": True, "diff_preview": "+x"})
+    assert out["smoke"] == {"ran": True, "ok": True, "source": "archive/smoke.log"}
+    assert out["summary"] == "Add struct_view tool"
+    # a failing run is reported as failing
+    (arch / "smoke.log").write_text("F...\n1 failed, 11 passed in 3.2s\n", encoding="utf-8")
+    assert server._backfill_merge_payload(ctx, {"archive": str(arch), "strict": True})["smoke"]["ok"] is False
+    # an archive outside this tenant's root is never read
+    outside = api["ctx"].root.parent / "elsewhere"
+    outside.mkdir(parents=True, exist_ok=True)
+    (outside / "smoke.log").write_text("99 passed\n", encoding="utf-8")
+    assert server._backfill_merge_payload(ctx, {"archive": str(outside), "strict": True}).get("smoke") is None
+    # a payload that already carries a smoke result is left alone
+    keep = {"archive": str(arch), "smoke": {"ran": False}}
+    assert server._backfill_merge_payload(ctx, keep)["smoke"] == {"ran": False}
+
+
+def test_wishlist_status_is_recomputed_on_read(api):
+    """Live-run regression: statuses are a view of the CURRENT harness, so a
+    capability that was merged since the last planner run must stop reading
+    "missing" immediately, not at the next run."""
+    bid = _make_brief(api)
+    api["client"].post(f"/evolution/goals/{bid}/derive", json={}, headers=api["headers"])
+    ledger = api["client"].get(f"/evolution/goals/{bid}", headers=api["headers"]).json()
+    assert {w["name"]: w["status"] for w in ledger["capability_wishlist"]}["3D structure viewer"] == "missing"
+    # The evolution lands a tool in the tenant's harness…
+    (api["ctx"].root / "tools" / "struct_view").mkdir(parents=True, exist_ok=True)
+    ledger = api["client"].get(f"/evolution/goals/{bid}", headers=api["headers"]).json()
+    assert {w["name"]: w["status"] for w in ledger["capability_wishlist"]}["3D structure viewer"] == "present:struct_view"
+    # …and the change is persisted, so the planner's next prompt sees it too.
+    stored = api["evo_store"].load_goals(api["ctx"].state, bid)
+    assert {w["name"]: w["status"] for w in stored["capability_wishlist"]}["3D structure viewer"] == "present:struct_view"

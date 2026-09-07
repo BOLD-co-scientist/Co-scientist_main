@@ -242,6 +242,23 @@ def test_wishlist_matching_has_no_substring_or_single_token_false_positives(goal
     assert st("3D structure viewer", INV, props2) == "proposed:p2"
 
 
+def test_wishlist_recognises_a_tool_the_system_built_for_itself(goals_mod):
+    """Live-run regression: after the harness merged a `struct_view` tool, the
+    wishlist entry "3D structure viewer / molecular renderer" still read
+    `missing`, so the planner kept being told to build what it had just built.
+    Tool names are slugs; wishlist entries are prose."""
+    st = goals_mod._wishlist_status
+    inv = dict(INV, tools=[*INV["tools"], "struct_view"])
+    assert st("3D structure viewer / molecular renderer", inv) == "present:struct_view"
+    assert st("3D structure viewer", inv) == "present:struct_view"
+    # ...without reopening the false positives a looser rule would allow
+    assert st("microcredit scoring", inv) == "missing"
+    assert st("Molecular docking runner", inv) == "missing"
+    assert st("Sequence homology and MSA search", inv) == "missing"
+    assert goals_mod._tok_match("ocr", "occlusion") is False
+    assert goals_mod._tok_match("struct", "structure") is True
+
+
 def test_subgoal_patch_preserves_status_and_honours_explicit_current(goals_mod):
     g = goals_mod
     led = g.empty_ledger("b", {"title": "T"})

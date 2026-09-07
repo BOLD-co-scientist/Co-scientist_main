@@ -1,6 +1,6 @@
 # R19 — Guided evolution search (proactive, goal-conditioned, judge + human gated)
 
-**Status:** In progress — backend built + offline-verified (2026-09-07); UI, platform-scope cutover and live judge run pending
+**Status:** 🟢 Built and live-verified end to end (2026-09-07). Backend + ui3 Plan panel + OpenAI judge at both gates; 139 offline tests; one full live loop on a real brief. Remaining: platform-scope staging/cutover (Phase 4, flag off by design)
 **Owner:** yuhe
 **Started:** 2026-09-06
 **Branch:** `feat/R19-guided-evolution` (off `feat/O1-onboarding` @ `9dda59c`) — worktree `../coscientist-R19`
@@ -90,20 +90,42 @@ Evolution tab: a **Plan** panel (goal ledger with order/current/hints/wishlist a
 - [x] 7. `tests/test_evo_planner.py` — 14 offline tests over the real routes (fake Claude + fake judge + fake evolution subprocess). `tests/test_judge_live.py` — live judge suite, skipped without a valid key.
 - [x] 8. `evolution/tools/propose_merge.py`: sibling-version fallback so "explore both" children of one parent both become version nodes.
 
-### Phase 3 — UI (ui3)
-- [ ] 9. `types.ts` / `api.ts` / `mock.ts`: goal ledger, proposals, judge, mode.
-- [ ] 10. `store.tsx`: mode, goals for the active brief, proposals, actions; refresh on evolution events.
-- [ ] 11. `PlannerPanel.tsx` (mode toggle, goals + drift question, proposal cards with judge recommendation, Run/Explore both/Decline/Edit) mounted in `EvolutionView`; `HitlPanel` shows the judge's gate-2 review; `eventVM` labels for `judge.*` and `evolution.judge_approved`.
-- [ ] 12. `npm run build` clean; mount `GoalsPanel` in the O2 wizard once O2 lands (O2's `OnboardingView` rewrite is uncommitted in the main checkout — not touched here to avoid a merge collision).
+### Phase 3 — UI (ui3) ✅
+- [x] 9. `types.ts` / `api.ts` / `mock.ts`: goal ledger, proposals, judge, mode, platform capability.
+- [x] 10. `store.tsx`: mode, goals for the active brief, proposals, actions; refresh on evolution **and judge** events; launch errors surfaced instead of swallowed.
+- [x] 11. `PlannerPanel.tsx` (mode toggle, goals + drift question, proposal cards with judge recommendation, Run/Queue/Explore both/Decline/Edit) mounted in `EvolutionView`; `HitlPanel` shows the judge's gate-2 review; `eventVM` labels for `judge.*` and judge-launched commands.
+- [x] 12. `npm run build` clean. (Mounting the goals panel in the O2 wizard waits for O2 to land — its `OnboardingView` rewrite is uncommitted in the main checkout, so touching it here would collide.)
+
+### Phase 3.5 — adversarial review pass ✅
+- [x] A. Eight-lens review of the whole diff produced 110 findings; verification was cut short by a credit exhaustion, so every finding was triaged by hand against the code.
+- [x] B. 26 real defects fixed (commit `4211415` + follow-ups), each with a regression test. The worst: the sibling-version fallback decided by substring-matching a `GitError` whose message always embeds the argv `--ff-only`, so **every** merge failure — dirty tree, conflict, anything — was silently recorded as a merged sibling version. Now decided by `git merge-base` (`sandbox.can_fast_forward`).
+- [x] C. `tests/test_evo_fixes.py` — 20 regressions incl. a real-git test that pins the ff-only bug, judge verdict/redaction/model-resolution, wishlist matching, drift rules.
 
 ### Phase 4 — Platform scope (UI/API evolution with fallback)
 - [ ] 13. `scaffold/sandbox.py` + `evolution/tools/bash_ro.py`: honour `settings.REPO`; `evolution/runtime.py --scope`; `propose_merge`: platform gate (ui3 build + API boot), fallback tag, cutover request.
 - [ ] 14. `deploy/platform_cutover.py` (host-side; `--once` / `--watch`; rebuild, restart, health, rollback) + `deploy/README-platform-cutover.md`.
 - [ ] 15. Tests + a live platform-scope evolution on a scratch clone of the platform (host-run API on a spare port).
 
-### Phase 5 — Live verification
-- [ ] 16. Host-run API on a scratch state dir: create a brief → derive goals → plan (real Claude) → judge (real OpenAI, needs a valid key) → pick → real evolution run → gate-2 review → version; automatic mode once through; drift question exercised; `GET /evolution/judge` calibration.
-- [ ] 17. Docs: ROADMAP status, CLAUDE.md pointer; O2 integration notes.
+### Phase 5 — Live verification ✅ (2026-09-07)
+- [x] 16. Full loop on a host-run API (`deploy/dev_api.sh 8823`, scratch tenant) against a real structural-biology brief. See **Live run** below.
+- [x] 17. Docs: ROADMAP, CLAUDE.md pointer (with the automatic-mode gate boundary stated precisely), `scaffold/hitl.py` comment, `.env.example` for every new knob, `docs/plans/PARALLEL.md` worktree row.
+
+## Live run — 2026-09-07 (the evidence)
+
+Brief: *"Structure of the LTEM stress-response protein and its ATP pocket"* — deliverables a PDF report with structure figures, a PDB model and a pocket residue table.
+
+1. **Goals derived** (`claude-fable-5`): six ordered subgoals with verifiable acceptance taken from the brief's success criteria, and a seven-item capability wishlist — every item `missing`, including **"3D structure viewer / molecular renderer"**.
+2. **Planner ran before any research session** and proposed four changes, each citing a subgoal and a wishlist gap. One was *"Add self-contained 3D structure viewer tool"*, correctly scoped `harness` (platform evolution is off, so the planner is told to route visual capabilities through a tool that writes a self-contained artifact into `results/`).
+3. **Judge (gate 1)** — `gpt-5.5`, resolved down from the configured `gpt-6-extra`, which the account does not have. Four approvals with real reasoning and real risks (external API flakiness, sequence privacy, CDN reproducibility).
+4. **Human picked** the viewer proposal → the unchanged evolution agent built `tools/struct_view/` (3Dmol.js HTML + PyMOL/matplotlib PNG fallback + bundled test PDB), registered it, and ran the smoke suite (12 passed).
+5. **Judge (gate 2)** reviewed the merge request: `approve 0.74`, *"Approve if smoke/compat is run and passes"* — and correctly refused to assume the smoke result, because this tenant's frozen fork runs the pre-R19 merge tool that sends no `smoke` key. That gap is now closed API-side by `_backfill_merge_payload`, which reads `smoke.log` from the tenant's own archive.
+6. **Human approved** → fast-forward merge → version node `ver/20260907-223732__…struct-view…` tagged and active; the proposal linked to it (`status: merged`, `version_id`).
+7. **The merge re-planned automatically**; the wishlist now reads `present:struct_view` for the viewer, and the planner moved on to the next gaps (structure prediction, pocket finder, docking, homology search).
+8. **Calibration**: gate 1 and gate 2 both 1 pair, 100 % judge/human agreement.
+
+Live judge suite (`COSCIENTIST_LIVE_JUDGE=1 pytest tests/test_judge_live.py`) — 5/5 against the real judge: approves a goal-relevant tool; declines skipping the smoke gate; declines a duplicate of `latex_compile`; **follows the researcher's taste**, declining a critic subagent because the history showed two prior declines of reviewer roles; and at gate 2 catches a real path-safety flaw in a diff rather than rubber-stamping it.
+
+**Two findings the live run produced, both fixed:** the frozen-fork smoke gap above, and a wishlist that still read `missing` for a capability the system had just built (tool names are slugs, wishlist entries are prose — matching is now prefix-aware, and statuses are recomputed on read rather than only when the planner runs).
 
 ## Files touched
 
@@ -122,8 +144,9 @@ Evolution tab: a **Plan** panel (goal ledger with order/current/hints/wishlist a
 
 ## Risks / open questions
 
-- **The judge key supplied on 2026-09-06 is rejected by OpenAI (401 on `/v1/models` via SDK and plain HTTPS).** The judge degrades to `unavailable` (manual mode keeps working without recommendations; automatic mode is refused). Live judge verification waits for a valid key; the key is read from `COSCIENTIST_JUDGE_OPENAI_API_KEY`, `OPENAI_API_KEY`, or `<platform state>/secrets/judge_openai_key`.
-- **Model id.** "GPT-6 Extra" is resolved against the account's model list; if absent the preference list falls back (`gpt-6`, `gpt-5.x`, `o3`, `gpt-4.1`). `served_by` records what actually judged.
+- **RESOLVED — the judge key works.** The 401s on 2026-09-06 (and the Anthropic 403s) were the account's credit exhaustion, not a bad key. The judge now runs live. **Rotate the key** that was pasted into the chat transcript.
+- **Model id.** "GPT-6 Extra" is not on this account; the preference list resolves to `gpt-5.5` and `served_by` records it on every verdict. A guess made while model listing fails is no longer cached.
+- **Frozen forks are the main deployment trap.** Everything R19 adds lives in `api/` + `state/`, but two tenant-side files changed (`propose_merge.py`, `sandbox.py`), and those reach only tenants created afterwards. The live run hit exactly this. Where it matters the API now compensates (`_backfill_merge_payload`); "Explore both" on an old tenant still cannot produce sibling versions, because its fork lacks the fallback.
 - **Judge gaming.** The evolution agent could write acceptance tests it then passes; the judge reviews the diff at gate 2 and the human reads the why. Not solved, only surfaced.
 - **Card fatigue.** Dedupe by fingerprint, declines remembered, `[]` is a valid planner output, one evolution at a time.
 - **Frozen forks.** Everything R19 adds lives in `api/` + `state/`; the only tenant-side change (propose_merge sibling fallback) reaches existing tenants via bootstrap-of-new-tenants or an evolution merge, as R17 documents.

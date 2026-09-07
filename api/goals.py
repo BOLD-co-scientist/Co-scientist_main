@@ -114,6 +114,21 @@ def _distinctive(text: str) -> set[str]:
     return {t for t in _norm(text).split() if len(t) > 2 and t not in _GENERIC_TOKENS}
 
 
+def _tok_match(a: str, b: str) -> bool:
+    """Same word allowing a shortened form: tool names are slugs ("struct_view")
+    while wishlist entries are prose ("3D structure viewer"), so a prefix of at
+    least four characters counts as the same word. Four, not three, so "ocr"
+    still fails to match "occlusion"."""
+    if a == b:
+        return True
+    return (len(a) >= 4 and b.startswith(a)) or (len(b) >= 4 and a.startswith(b))
+
+
+def _covered(small: set[str], big: set[str]) -> bool:
+    """Every identifying word of ``small`` appears in ``big``."""
+    return bool(small) and all(any(_tok_match(x, y) for y in big) for x in small)
+
+
 def _wishlist_status(name: str, inv: dict, proposals: list[dict] | None = None) -> str:
     """Is this wanted capability already present, already proposed, or missing?
 
@@ -129,15 +144,20 @@ def _wishlist_status(name: str, inv: dict, proposals: list[dict] | None = None) 
         return "missing"
     for tool in inv.get("tools") or []:
         have = _distinctive(tool)
-        if have and (have <= want or want <= have):
+        # Either direction: the tool slug may be shorter than the prose name
+        # ("struct_view" for "3D structure viewer / molecular renderer") or longer.
+        if _covered(have, want) or _covered(want, have):
             return f"present:{tool}"
     for skill in inv.get("skills") or []:
         have = _distinctive(skill.replace("-", " "))
-        if have and (have <= want or want <= have):
+        if _covered(have, want) or _covered(want, have):
             return f"present:skill:{skill}"
     for p in proposals or []:
         have = _distinctive(p.get("title", ""))
-        if not have or not want <= have:
+        # A proposal must cover the WHOLE wanted capability to claim it — one
+        # shared word is what made "Add a structure predictor tool" look like it
+        # satisfied "3D structure viewer".
+        if not _covered(want, have):
             continue
         if p.get("status") == "merged" and p.get("version_id"):
             return f"version:{p['version_id']}"
